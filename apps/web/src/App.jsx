@@ -5,21 +5,26 @@ function App() {
 
   return (
     <div className="page-shell">
-      <header className="site-header" aria-label="Sourcerer navigation">
-        <nav className="center-nav" aria-label="Primary navigation">
-          <a href="/" aria-label="Sourcerer home">
-            Sourcerer,
-          </a>
-          <a href="/" aria-label="Events Sourcerer">
-            Events Sourcerer
-          </a>
-        </nav>
-        <button className="login-button" type="button">
-          SIGN UP OR LOG IN
-        </button>
-      </header>
+      <div className="header-border">
+        <div className="page-wrap">
+          <header className="app-header" aria-label="Sourcerer navigation">
+            <div className="header-spacer" aria-hidden="true" />
+            <nav className="center-nav" aria-label="Primary navigation">
+              <a href="/" aria-label="Sourcerer home">
+                Sourcerer,
+              </a>
+              <a href="/" aria-label="Events Sourcerer">
+                Events Sourcerer
+              </a>
+            </nav>
+            <button className="login-button" type="button">
+              SIGN UP OR LOG IN
+            </button>
+          </header>
+        </div>
+      </div>
 
-      <main className="hero" aria-labelledby="hero-title">
+      <main className="page-wrap home-hero" aria-labelledby="hero-title">
         <section className="hero-copy">
           <h1 id="hero-title">
             Don&apos;t share your deep, dark secrets, just <em>your domain</em>.
