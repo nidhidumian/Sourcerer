@@ -11,13 +11,16 @@ Events Sourcerer: user enters company domain + target geography. App infers prod
 5. Saved events view (D1, cross-device)
 
 ## Homepage (match docs/DESIGN.md + DESIGN-branding.json)
-- Nav center: Sourcerer, Events Sourcerer (Source Serif 4 italic)
+- Layout: centered column with wide side margins like astro-charts.com (content NOT full-width)
+- Full-width horizontal rule below nav (edge to edge)
+- Nav center: Sourcerer, Events Sourcerer (comma after first Sourcerer)
 - Nav right: SIGN UP OR LOG IN
-- Headline: Don't share your deep, dark secrets, just *your domain*
-- Body: I will study your product, understand decision makers, industry and what verticals your product is useful for to give you a list of events specifically for your field and event marketing goals.
-- One row: [domain input pill] [geography input pill] SUBMIT
-- Colors: background #FBF8F4, ink #16130F, fonts Source Serif 4 + JetBrains Mono
-- Sharp corners (0px radius) on buttons/inputs
+- Headline: Don't share your deep, dark secrets, just *your domain*.
+- Body: I will study your product, understand your ICP, industry and the verticals your product is useful for to give you a list of events specifically for your field and event marketing goals.
+- Input row (black pills, auto-width to fit text, ALL CAPS):
+  - DOMAIN
+  - TARGET GEOGRAPHY
+  - SUBMIT (pill button, same style)
 
 ## Event discovery logic
 ### Track A — Industry events
