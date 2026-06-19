@@ -54,7 +54,8 @@
     align-items: center;
     width: min(100% - 48px, 1200px);
     margin: 0 auto;
-    padding: 34px 0 0;
+    padding: 34px 0 24px;
+    border-bottom: 1px solid rgba(22, 19, 15, 0.22);
   }
 
   .center-nav {
@@ -62,7 +63,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 28px;
+    gap: 6px;
     color: var(--sourcerer-ink);
     font-size: 17px;
     font-style: italic;
@@ -124,11 +125,11 @@
   }
 
   .search-row {
-    display: grid;
-    grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
     width: min(100%, 1060px);
-    align-items: stretch;
+    align-items: center;
   }
 
   .search-row input,
@@ -145,9 +146,16 @@
   }
 
   .search-row input {
-    width: 100%;
     padding: 0 20px;
     outline: none;
+  }
+
+  .search-row #domain {
+    width: 18ch;
+  }
+
+  .search-row #geography {
+    width: 30ch;
   }
 
   .search-row input::placeholder {
@@ -160,7 +168,7 @@
   }
 
   .search-row button {
-    min-width: 142px;
+    width: auto;
     padding: 0 26px;
   }
 
@@ -213,9 +221,12 @@
   }
 
   .search-row {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
   }
 
+  .search-row #domain,
+  .search-row #geography,
   .search-row button {
     width: 100%;
   }

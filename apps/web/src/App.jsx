@@ -8,7 +8,7 @@ function App() {
       <header className="site-header" aria-label="Sourcerer navigation">
         <nav className="center-nav" aria-label="Primary navigation">
           <a href="/" aria-label="Sourcerer home">
-            Sourcerer
+            Sourcerer,
           </a>
           <a href="/" aria-label="Events Sourcerer">
             Events Sourcerer
@@ -22,12 +22,12 @@ function App() {
       <main className="hero" aria-labelledby="hero-title">
         <section className="hero-copy">
           <h1 id="hero-title">
-            Don&apos;t share your deep, dark secrets, just <em>your domain</em>
+            Don&apos;t share your deep, dark secrets, just <em>your domain</em>.
           </h1>
           <p>
-            I will study your product, understand decision makers, industry and
-            what verticals your product is useful for to give you a list of
-            events specifically for your field and event marketing goals.
+            I will study your product, understand your ICP, industry and the
+            verticals your product is useful for to give you a list of events
+            specifically for your field and event marketing goals.
           </p>
         </section>
 
@@ -51,7 +51,7 @@ function App() {
             name="geography"
             type="text"
             autoComplete="country-name"
-            placeholder="type target geography here"
+            placeholder="TYPE TARGET GEOGRAPHY HERE"
           />
 
           <button type="submit">SUBMIT</button>
