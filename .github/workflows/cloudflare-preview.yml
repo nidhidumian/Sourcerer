@@ -1,0 +1,45 @@
+name: Cloudflare Preview
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: Build and preview
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install web dependencies
+        run: npm install
+        working-directory: apps/web
+
+      - name: Build web
+        run: npm run build
+        working-directory: apps/web
+
+      - name: Install worker dependencies
+        run: npm install
+        working-directory: workers/api
+
+      - name: Validate worker config
+        run: npx wrangler deploy --dry-run
+        working-directory: workers/api
+
+      - name: Deploy Pages preview
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: ./workers/api/node_modules/.bin/wrangler pages deploy apps/web/dist --project-name=sourcerer --branch="${{ github.head_ref }}"
