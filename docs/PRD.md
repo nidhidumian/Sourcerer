@@ -25,6 +25,8 @@ Events Sourcerer: user enters company domain + target geography. App infers prod
 - Layout: .page-wrap max-width 768px, margin 0 auto (equal side margins)
 - Header: 3-column grid (empty spacer | centered "Sourcerer, Events Sourcerer" | SIGN UP OR LOG IN); full-width header border 100vw
 - Hero + body + pills: left-aligned inside .page-wrap (NOT text-align center)
+- Hero eyebrow: "B2B EVENTS" (JetBrains Mono 10px, uppercase, --muted, like Astro "ASTROLOGY, UNHURRIED")
+- Nav: Lucide WandSparkles left, Lucide User right
 
 ## Event discovery logic
 ### Track A — Industry events
