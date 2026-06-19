@@ -22,6 +22,10 @@ Events Sourcerer: user enters company domain + target geography. App infers prod
   - TARGET GEOGRAPHY
   - SUBMIT (pill button, same style)
 
+- Layout: .page-wrap max-width 768px, margin 0 auto (equal side margins)
+- Header: 3-column grid (empty spacer | centered "Sourcerer, Events Sourcerer" | SIGN UP OR LOG IN); full-width header border 100vw
+- Hero + body + pills: left-aligned inside .page-wrap (NOT text-align center)
+
 ## Event discovery logic
 ### Track A — Industry events
 Main theme matches what the company sells (from domain analysis).
