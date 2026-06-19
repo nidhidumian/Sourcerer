@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "tailwindcss -i ./src/styles.css -o ./src/tailwind.css",
-    "dev": "vite --host 0.0.0.0",
-    "prebuild": "tailwindcss -i ./src/styles.css -o ./src/tailwind.css --minify",
+    "build:css": "tailwindcss -i ./src/styles.css -o ./src/tailwind.css",
+    "dev": "npm run build:css && vite --host 0.0.0.0",
+    "prebuild": "npm run build:css -- --minify",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
@@ -15,6 +15,7 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
     "tailwindcss": "^3.4.17",
     "vite": "^6.0.0"
   }
