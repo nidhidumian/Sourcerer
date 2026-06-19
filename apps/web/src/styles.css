@@ -10,6 +10,7 @@
     --sourcerer-ink: #16130f;
     --sourcerer-earth: #3b342c;
     --sourcerer-link: #ede6db;
+    --muted: #8c8578;
   }
 
   * {
@@ -60,16 +61,11 @@
   }
 
   .app-header {
-    --header-side: 154px;
+    --header-side: 48px;
     display: grid;
     grid-template-columns: var(--header-side) minmax(0, 1fr) var(--header-side);
     align-items: center;
     padding: 28px 24px 22px;
-  }
-
-  .header-spacer {
-    width: var(--header-side);
-    height: 1px;
   }
 
   .center-nav {
@@ -85,21 +81,26 @@
     white-space: nowrap;
   }
 
-  .login-button {
-    grid-column: 3;
-    justify-self: end;
+  .header-icon-button {
     width: var(--header-side);
-    min-height: 42px;
-    border: 1px solid var(--sourcerer-ink);
+    height: 42px;
+    display: grid;
+    place-items: center;
+    border: 0;
     border-radius: 0;
     background: transparent;
     color: var(--sourcerer-ink);
-    padding: 0 18px;
-    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1.2px;
     cursor: default;
+  }
+
+  .header-icon-button:first-child {
+    grid-column: 1;
+    justify-self: start;
+  }
+
+  .header-icon-button:last-child {
+    grid-column: 3;
+    justify-self: end;
   }
 
   .home-hero {
@@ -115,6 +116,17 @@
 
   .hero-copy {
     width: 100%;
+  }
+
+  .hero-eyebrow {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
+    text-transform: uppercase;
   }
 
   .home-hero h1 {
@@ -198,13 +210,9 @@
 
 @media (max-width: 760px) {
   .app-header {
-    --header-side: 86px;
+    --header-side: 42px;
     justify-items: center;
     padding: 24px 16px;
-  }
-
-  .header-spacer {
-    display: block;
   }
 
   .center-nav {
@@ -214,16 +222,6 @@
     font-size: 14px;
     line-height: 1.15;
     row-gap: 8px;
-  }
-
-  .login-button {
-    grid-column: 3;
-    justify-self: end;
-    padding: 0 8px;
-    font-size: 9px;
-    line-height: 1.15;
-    letter-spacing: 0.7px;
-    white-space: normal;
   }
 
   .home-hero {

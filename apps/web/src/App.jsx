@@ -1,3 +1,5 @@
+import { User, WandSparkles } from "lucide-react";
+
 function App() {
   function handleSubmit(event) {
     event.preventDefault();
@@ -8,7 +10,9 @@ function App() {
       <div className="header-border">
         <div className="page-wrap">
           <header className="app-header" aria-label="Sourcerer navigation">
-            <div className="header-spacer" aria-hidden="true" />
+            <button className="header-icon-button" type="button" aria-label="Menu">
+              <WandSparkles size={24} strokeWidth={1.5} aria-hidden="true" />
+            </button>
             <nav className="center-nav" aria-label="Primary navigation">
               <a href="/" aria-label="Sourcerer home">
                 Sourcerer,
@@ -17,8 +21,12 @@ function App() {
                 Events Sourcerer
               </a>
             </nav>
-            <button className="login-button" type="button">
-              SIGN UP OR LOG IN
+            <button
+              className="header-icon-button"
+              type="button"
+              aria-label="Sign up or log in"
+            >
+              <User size={24} strokeWidth={1.5} aria-hidden="true" />
             </button>
           </header>
         </div>
@@ -26,6 +34,7 @@ function App() {
 
       <main className="page-wrap home-hero" aria-labelledby="hero-title">
         <section className="hero-copy">
+          <p className="hero-eyebrow">B2B EVENTS</p>
           <h1 id="hero-title">
             Don&apos;t share your deep, dark secrets, just <em>your domain</em>.
           </h1>
