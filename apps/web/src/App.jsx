@@ -1,8 +1,48 @@
 import { User, WandSparkles } from "lucide-react";
+import { useState } from "react";
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+
+function apiUrl(path) {
+  return `${API_BASE_URL.replace(/\/$/, "")}${path}`;
+}
 
 function App() {
-  function handleSubmit(event) {
+  const [analysis, setAnalysis] = useState(null);
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const profile = analysis?.profile;
+
+  async function handleSubmit(event) {
     event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const domain = String(formData.get("domain") || "").trim();
+    const geography = String(formData.get("geography") || "").trim();
+
+    setAnalysis(null);
+    setError("");
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(apiUrl("/api/analyze"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ domain, geography }),
+      });
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Analyze request failed.");
+      }
+
+      setAnalysis(payload);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -56,6 +96,7 @@ function App() {
             size={6}
             autoComplete="url"
             placeholder="DOMAIN"
+            required
           />
 
           <label className="sr-only" htmlFor="geography">
@@ -68,13 +109,52 @@ function App() {
             size={16}
             autoComplete="country-name"
             placeholder="TARGET GEOGRAPHY"
+            required
           />
 
-          <button type="submit">SUBMIT</button>
+          <button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "STUDYING" : "SUBMIT"}
+          </button>
         </form>
+
+        <section className="analysis-feedback" aria-live="polite">
+          {error ? <p className="analysis-error">{error}</p> : null}
+          {profile ? (
+            <div className="analysis-result">
+              <p className="analysis-kicker">
+                {analysis.cached ? "CACHED ANALYSIS" : "ANALYSIS READY"}
+              </p>
+              <h2>{profile.companyName || analysis.domain}</h2>
+              <p>{profile.oneLiner}</p>
+              <dl>
+                <div>
+                  <dt>FIT SCORE</dt>
+                  <dd>{profile.eventFitScore}/100</dd>
+                </div>
+                <div>
+                  <dt>INDUSTRY</dt>
+                  <dd>{profile.industry}</dd>
+                </div>
+                <div>
+                  <dt>ICP</dt>
+                  <dd>{formatList(profile.icp)}</dd>
+                </div>
+                <div>
+                  <dt>VERTICALS</dt>
+                  <dd>{formatList(profile.verticals)}</dd>
+                </div>
+              </dl>
+              <p>{profile.scoreRationale}</p>
+            </div>
+          ) : null}
+        </section>
       </main>
     </div>
   );
+}
+
+function formatList(value) {
+  return Array.isArray(value) ? value.join(", ") : "";
 }
 
 export default App;

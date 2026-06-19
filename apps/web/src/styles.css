@@ -195,6 +195,85 @@
     padding: 0 30px;
   }
 
+  .search-row button:disabled {
+    opacity: 0.72;
+  }
+
+  .analysis-feedback {
+    width: min(100%, 720px);
+    min-height: 0;
+  }
+
+  .analysis-error,
+  .analysis-result {
+    border-top: 1px solid rgba(22, 19, 15, 0.24);
+    padding-top: 24px;
+  }
+
+  .analysis-error {
+    margin: 0;
+    color: #7a1f16;
+    font-size: 18px;
+    line-height: 1.45;
+  }
+
+  .analysis-result {
+    color: var(--sourcerer-ink);
+  }
+
+  .analysis-result .analysis-kicker {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .analysis-result h2 {
+    margin: 0;
+    font-size: 28px;
+    font-style: italic;
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: 0;
+  }
+
+  .analysis-result p {
+    width: min(100%, 640px);
+    margin: 16px 0 0;
+    color: var(--sourcerer-earth);
+    font-size: 18px;
+    line-height: 1.5;
+  }
+
+  .analysis-result dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 32px;
+    margin: 24px 0 0;
+  }
+
+  .analysis-result dt {
+    margin: 0 0 6px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .analysis-result dd {
+    margin: 0;
+    color: var(--sourcerer-ink);
+    font-size: 17px;
+    line-height: 1.4;
+  }
+
   .sr-only {
     position: absolute;
     width: 1px;
@@ -247,5 +326,9 @@
   .search-row #geography,
   .search-row button {
     width: 100%;
+  }
+
+  .analysis-result dl {
+    grid-template-columns: 1fr;
   }
 }
