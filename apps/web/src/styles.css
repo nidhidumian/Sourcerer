@@ -52,9 +52,9 @@
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    width: min(100% - 48px, 1200px);
+    width: 100%;
     margin: 0 auto;
-    padding: 34px 0 24px;
+    padding: 34px max(24px, calc((100vw - 1200px) / 2)) 24px;
     border-bottom: 1px solid rgba(22, 19, 15, 0.22);
   }
 
@@ -89,7 +89,7 @@
 
   .hero {
     flex: 1;
-    width: min(100% - 48px, 1180px);
+    width: min(100% - 96px, 860px);
     margin: 0 auto;
     display: flex;
     flex-direction: column;
@@ -99,7 +99,7 @@
   }
 
   .hero-copy {
-    max-width: 980px;
+    width: 100%;
   }
 
   .hero h1 {
@@ -117,7 +117,7 @@
   }
 
   .hero p {
-    width: min(100%, 760px);
+    width: min(100%, 720px);
     margin: 32px 0 0;
     color: var(--sourcerer-earth);
     font-size: 20px;
@@ -143,19 +143,14 @@
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 1.1px;
+    text-transform: uppercase;
   }
 
   .search-row input {
-    padding: 0 20px;
+    width: auto;
+    min-width: 0;
+    padding: 0 24px;
     outline: none;
-  }
-
-  .search-row #domain {
-    width: 18ch;
-  }
-
-  .search-row #geography {
-    width: 30ch;
   }
 
   .search-row input::placeholder {
@@ -169,7 +164,7 @@
 
   .search-row button {
     width: auto;
-    padding: 0 26px;
+    padding: 0 30px;
   }
 
   .sr-only {
@@ -187,11 +182,10 @@
 
 @media (max-width: 760px) {
   .site-header {
-    width: min(100% - 32px, 1200px);
     grid-template-columns: 1fr;
     justify-items: center;
     gap: 18px;
-    padding-top: 24px;
+    padding: 24px 16px;
   }
 
   .center-nav,
@@ -206,7 +200,7 @@
   }
 
   .hero {
-    width: min(100% - 32px, 1180px);
+    width: min(100% - 32px, 860px);
     justify-content: flex-start;
     gap: 34px;
     padding: 72px 0 80px;

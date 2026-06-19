@@ -39,8 +39,9 @@ function App() {
             id="domain"
             name="domain"
             type="text"
+            size={6}
             autoComplete="url"
-            placeholder="TYPE DOMAIN HERE"
+            placeholder="DOMAIN"
           />
 
           <label className="sr-only" htmlFor="geography">
@@ -50,8 +51,9 @@ function App() {
             id="geography"
             name="geography"
             type="text"
+            size={16}
             autoComplete="country-name"
-            placeholder="TYPE TARGET GEOGRAPHY HERE"
+            placeholder="TARGET GEOGRAPHY"
           />
 
           <button type="submit">SUBMIT</button>
