@@ -251,22 +251,16 @@ function App() {
                             .join(" · ")}
                         </p>
                       ) : null}
-                      {item.competitorSponsors &&
-                      item.competitorSponsors.length > 0 ? (
+                      {item.lastYearSponsors &&
+                      item.lastYearSponsors.length > 0 ? (
                         <p className="event-sponsors">
-                          Last year sponsors: {item.competitorSponsors.join(", ")}
+                          Last year sponsors: {item.lastYearSponsors.join(", ")}
                         </p>
                       ) : null}
                       {item.agenda && item.agenda.length > 0 ? (
                         <div className="event-extra">
                           <dt>AGENDA</dt>
                           <dd>{item.agenda.join(" · ")}</dd>
-                        </div>
-                      ) : null}
-                      {item.speakers && item.speakers.length > 0 ? (
-                        <div className="event-extra">
-                          <dt>SPEAKERS</dt>
-                          <dd>{item.speakers.join(" · ")}</dd>
                         </div>
                       ) : null}
                       <div className="event-pills">
