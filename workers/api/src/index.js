@@ -57,114 +57,226 @@ const COUNTRY_ALIASES = {
 // Small curated flagship map. Each entry is a major recurring B2B event tied to a
 // known country. It is shown as a TBD anchor only when its country matches the
 // search geography AND its tags intersect the analyze output. Intentionally short.
+// Generic tags are too broad to anchor a flagship on their own — almost every
+// B2B company matches them. A flagship only triggers when one of its *specific*
+// (non-generic) tags matches the company's industry / recommended event types.
+const GENERIC_TAGS = new Set([
+  "saas",
+  "b2b",
+  "b2c",
+  "cloud",
+  "security",
+  "ai",
+  "marketing",
+  "tech",
+  "startup",
+  "data",
+  "it",
+  "software",
+  "developer",
+  "enterprise",
+]);
+
+// `lastYearSponsors` lists well-known sponsors/exhibitors of the prior edition.
+// It is intersected (case-insensitive) with the analyze competitor list — only
+// competitors that actually appear here are ever shown, never the raw list.
 const FLAGSHIP_EVENTS = [
   {
     name: "AWS re:Invent",
     organizer: "Amazon Web Services",
     url: "https://reinvent.awsevents.com/",
     country: "United States",
+    description:
+      "AWS's flagship cloud computing conference covering infrastructure, DevOps, data, and security.",
     priorYearDate: "Dec 2-6, 2024",
     priorYearLocation: "Las Vegas, United States",
     tags: ["cloud", "infrastructure", "devops", "developer"],
+    lastYearSponsors: [
+      "HashiCorp",
+      "Datadog",
+      "Snowflake",
+      "MongoDB",
+      "GitLab",
+      "CrowdStrike",
+      "Okta",
+      "Palo Alto Networks",
+      "Wiz",
+      "1Password",
+    ],
   },
   {
     name: "Google Cloud Next",
     organizer: "Google",
     url: "https://cloud.withgoogle.com/next",
     country: "United States",
+    description:
+      "Google Cloud's annual conference for developers and IT leaders building on Google Cloud.",
     priorYearDate: "Apr 9-11, 2024",
     priorYearLocation: "Las Vegas, United States",
     tags: ["cloud", "infrastructure", "developer"],
+    lastYearSponsors: [
+      "HashiCorp",
+      "Datadog",
+      "MongoDB",
+      "Snowflake",
+      "GitLab",
+      "Palo Alto Networks",
+      "Okta",
+    ],
   },
   {
     name: "Microsoft Ignite",
     organizer: "Microsoft",
     url: "https://ignite.microsoft.com/",
     country: "United States",
+    description:
+      "Microsoft's flagship conference for IT pros and developers on cloud, security, and productivity.",
     priorYearDate: "Nov 19-22, 2024",
     priorYearLocation: "Chicago, United States",
     tags: ["cloud", "infrastructure", "developer"],
+    lastYearSponsors: [
+      "CrowdStrike",
+      "Okta",
+      "HashiCorp",
+      "Palo Alto Networks",
+      "Rubrik",
+    ],
   },
   {
     name: "Dreamforce",
     organizer: "Salesforce",
     url: "https://www.salesforce.com/dreamforce/",
     country: "United States",
+    description:
+      "Salesforce's flagship event for CRM, sales, service, and go-to-market teams.",
     priorYearDate: "Sep 17-19, 2024",
     priorYearLocation: "San Francisco, United States",
     tags: ["crm", "sales"],
+    lastYearSponsors: ["Gong", "Outreach", "ZoomInfo", "Salesloft", "HubSpot"],
   },
   {
     name: "SaaStr Annual",
     organizer: "SaaStr",
     url: "https://www.saastrannual.com/",
     country: "United States",
+    description:
+      "The largest community event for B2B SaaS founders, revenue, and go-to-market leaders.",
     priorYearDate: "Sep 10-12, 2024",
     priorYearLocation: "San Mateo, United States",
     tags: ["saas"],
+    lastYearSponsors: ["Stripe", "HubSpot", "Gong", "Salesloft"],
   },
   {
     name: "Money20/20 USA",
     organizer: "Money20/20",
     url: "https://www.money2020.com/",
     country: "United States",
+    description:
+      "The world's largest fintech event covering payments, banking, and financial services.",
     priorYearDate: "Oct 27-30, 2024",
     priorYearLocation: "Las Vegas, United States",
     tags: ["fintech", "payments"],
+    lastYearSponsors: [
+      "Stripe",
+      "Plaid",
+      "Adyen",
+      "Marqeta",
+      "Visa",
+      "Mastercard",
+      "Brex",
+      "Ramp",
+    ],
   },
   {
     name: "HIMSS Global Health Conference",
     organizer: "HIMSS",
     url: "https://www.himssconference.com/",
     country: "United States",
+    description:
+      "The leading health information and technology conference for healthcare and medtech.",
     priorYearDate: "Mar 11-15, 2024",
     priorYearLocation: "Orlando, United States",
     tags: ["healthcare", "medtech"],
+    lastYearSponsors: ["Epic", "Oracle Health", "Microsoft", "Salesforce"],
   },
   {
     name: "RSA Conference",
     organizer: "RSA",
     url: "https://www.rsaconference.com/",
     country: "United States",
+    description:
+      "The world's leading cybersecurity and information security conference.",
     priorYearDate: "May 6-9, 2024",
     priorYearLocation: "San Francisco, United States",
     tags: ["cybersecurity", "security", "infosec"],
+    lastYearSponsors: [
+      "CrowdStrike",
+      "Palo Alto Networks",
+      "Okta",
+      "CyberArk",
+      "HashiCorp",
+      "1Password",
+      "Zscaler",
+      "Fortinet",
+      "Cisco",
+      "Wiz",
+    ],
   },
   {
     name: "Legalweek",
     organizer: "ALM",
     url: "https://www.event.law.com/legalweek",
     country: "United States",
+    description:
+      "The premier event for legal technology, legal operations, and law firm innovation.",
     priorYearDate: "Jan 28-31, 2025",
     priorYearLocation: "New York, United States",
     tags: ["legal", "legaltech"],
+    lastYearSponsors: [
+      "Relativity",
+      "iManage",
+      "Litera",
+      "Ironclad",
+      "LinkSquares",
+      "Evisort",
+      "Clio",
+    ],
   },
   {
     name: "Web Summit",
     organizer: "Web Summit",
     url: "https://websummit.com/",
     country: "Portugal",
+    description:
+      "One of the largest global technology conferences, spanning startups, software, and investors.",
     priorYearDate: "Nov 11-14, 2024",
     priorYearLocation: "Lisbon, Portugal",
     tags: ["tech", "startup"],
+    lastYearSponsors: ["Stripe", "Amazon Web Services", "Google Cloud"],
   },
   {
     name: "Collision",
     organizer: "Web Summit",
     url: "https://collisionconf.com/",
     country: "Canada",
+    description:
+      "North America's fast-growing tech conference for startups, software, and investors.",
     priorYearDate: "Jun 17-20, 2024",
     priorYearLocation: "Toronto, Canada",
     tags: ["tech", "startup"],
+    lastYearSponsors: ["Stripe", "Amazon Web Services", "Google Cloud"],
   },
   {
     name: "London Tech Week",
     organizer: "London Tech Week",
     url: "https://londontechweek.com/",
     country: "United Kingdom",
+    description:
+      "The UK's flagship technology festival connecting startups, enterprises, and investors.",
     priorYearDate: "Jun 10-14, 2024",
     priorYearLocation: "London, United Kingdom",
     tags: ["tech", "startup"],
+    lastYearSponsors: ["Amazon Web Services", "Google Cloud", "Microsoft"],
   },
 ];
 
@@ -822,12 +934,12 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
     return event._startDate >= tomorrow && event._startDate <= windowEnd;
   });
 
-  // Relevance filter — fail open if it would empty the list.
+  // Relevance filter — applies to ALL events incl. curated flagships (they are
+  // not auto-included). Fail open if it would empty the list.
   const relevanceTerms = buildRelevanceTerms(profile);
   if (relevanceTerms.length > 0) {
-    const matched = events.filter(
-      (event) =>
-        event.source === "curated" || eventMatchesRelevance(event, relevanceTerms),
+    const matched = events.filter((event) =>
+      eventMatchesRelevance(event, relevanceTerms),
     );
     if (matched.length > 0) {
       events = matched;
@@ -863,13 +975,17 @@ function curatedFlagships(profile, geography) {
     if (canonicalCountry(flagship.country) !== canonicalCountry(geography)) {
       return false;
     }
-    const tagHit = flagship.tags.some((tag) => focusTerms.has(tag));
+    // Require a SPECIFIC (non-generic) tag to match — generic tags like
+    // "saas"/"cloud"/"security" must never anchor a flagship on their own.
+    const tagHit = flagship.tags.some(
+      (tag) => !GENERIC_TAGS.has(tag) && focusTerms.has(tag),
+    );
     const nameHit = recommendedText.includes(flagship.name.toLowerCase());
     return tagHit || nameHit;
   }).map((flagship) => ({
     name: flagship.name,
     organizer: flagship.organizer,
-    description: "",
+    description: flagship.description || "",
     city: "",
     country: flagship.country,
     startDate: "",
@@ -879,7 +995,7 @@ function curatedFlagships(profile, geography) {
     priorYearLocation: flagship.priorYearLocation,
     agenda: [],
     speakers: [],
-    sponsors: [],
+    sponsors: flagship.lastYearSponsors || [],
     sponsorshipEmail: "",
     url: flagship.url,
     source: "curated",
@@ -946,11 +1062,17 @@ function buildRelevanceTerms(profile) {
   return Array.from(terms);
 }
 
-// Words describing the company's OWN category (not the customers it sells to).
-// Used to gate flagship anchors so they stay on-domain.
+// Words describing the company's OWN focus (industry, product, and the event
+// types it should attend) — NOT the customer verticals/ICP it sells to. Used to
+// gate flagship anchors so they stay on-domain.
 function buildFlagshipTerms(profile) {
+  const sources = [
+    profile.industry,
+    profile.productCategory,
+    ...toStringArray(profile.recommendedEventTypes),
+  ];
   const words = new Set();
-  for (const source of [profile.industry, profile.productCategory]) {
+  for (const source of sources) {
     if (typeof source !== "string") {
       continue;
     }
