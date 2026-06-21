@@ -1,5 +1,5 @@
 import { User, WandSparkles } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
@@ -11,7 +11,59 @@ function App() {
   const [analysis, setAnalysis] = useState(null);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [events, setEvents] = useState(null);
+  const [eventsError, setEventsError] = useState("");
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const profile = analysis?.profile;
+  const eventList = events?.events;
+
+  useEffect(() => {
+    const searchId = analysis?.searchId;
+
+    if (!searchId) {
+      setEvents(null);
+      setEventsError("");
+      setIsLoadingEvents(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadEvents() {
+      setEvents(null);
+      setEventsError("");
+      setIsLoadingEvents(true);
+
+      try {
+        const response = await fetch(
+          apiUrl(`/api/events?searchId=${encodeURIComponent(searchId)}`),
+        );
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(payload.error || "Events request failed.");
+        }
+
+        if (!cancelled) {
+          setEvents(payload);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setEventsError(requestError.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingEvents(false);
+        }
+      }
+    }
+
+    loadEvents();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [analysis?.searchId]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -151,6 +203,56 @@ function App() {
             </div>
           ) : null}
         </section>
+
+        {analysis ? (
+          <section className="events-feedback" aria-live="polite">
+            {isLoadingEvents ? (
+              <p className="events-kicker">FINDING EVENTS…</p>
+            ) : null}
+            {eventsError ? (
+              <p className="analysis-error">{eventsError}</p>
+            ) : null}
+            {eventList && eventList.length > 0 ? (
+              <div className="events-result">
+                <p className="events-kicker">
+                  {events.cached ? "CACHED EVENTS" : "EVENTS READY"}
+                </p>
+                <ul className="event-card-list">
+                  {eventList.map((item) => (
+                    <li className="event-card" key={item.url}>
+                      <h3 className="event-name">{item.name}</h3>
+                      <dl className="event-meta">
+                        {item.date ? (
+                          <div>
+                            <dt>DATE</dt>
+                            <dd>{item.date}</dd>
+                          </div>
+                        ) : null}
+                        {item.location ? (
+                          <div>
+                            <dt>LOCATION</dt>
+                            <dd>{item.location}</dd>
+                          </div>
+                        ) : null}
+                      </dl>
+                      <a
+                        className="event-link"
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        VISIT EVENT
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {eventList && eventList.length === 0 && !isLoadingEvents && !eventsError ? (
+              <p className="events-kicker">NO EVENTS FOUND</p>
+            ) : null}
+          </section>
+        ) : null}
       </main>
     </div>
   );

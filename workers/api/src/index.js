@@ -9,11 +9,17 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 900;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
+const EXA_SEARCH_URL = "https://api.exa.ai/search";
+const DEFAULT_EXA_SEARCH_MONTHLY_LIMIT = 300;
+const DEFAULT_EXA_EVENTS_MAX_QUERIES = 4;
+const DEFAULT_EXA_RESULTS_PER_QUERY = 5;
+const DEFAULT_EXA_MAX_EVENTS = 12;
+
 app.use(
   "/api/*",
   cors({
     origin: (origin, c) => c.env.CORS_ORIGIN || origin || "*",
-    allowMethods: ["POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type"],
     maxAge: 86400,
   }),
@@ -118,6 +124,128 @@ app.post("/api/analyze", async (c) => {
   });
 });
 
+app.get("/api/events", async (c) => {
+  if (!c.env.DB) {
+    return c.json({ error: "D1 database binding is not configured." }, 503);
+  }
+
+  const searchId = (c.req.query("searchId") || "").trim();
+  const domain = normalizeDomain(c.req.query("domain"));
+  const geography = normalizeGeography(c.req.query("geography"));
+
+  const search = await getSearchForEvents(c.env.DB, { searchId, domain, geography });
+
+  if (!search) {
+    if (!searchId && (!domain || !geography)) {
+      return c.json(
+        {
+          error:
+            "Provide a searchId, or a valid domain and target geography.",
+        },
+        400,
+      );
+    }
+    return c.json({ error: "No analysis found for the requested search." }, 404);
+  }
+
+  const cached = await getCachedEvents(c.env.DB, search.id);
+
+  if (cached) {
+    return c.json({
+      searchId: search.id,
+      domain: search.domain,
+      geography: search.geography,
+      cached: true,
+      createdAt: cached.created_at,
+      events: parseJson(cached.events_json, []),
+    });
+  }
+
+  if (!c.env.EXA_API_KEY) {
+    return c.json(
+      {
+        error:
+          "Exa is not configured yet. Add EXA_API_KEY to the Worker secrets.",
+      },
+      503,
+    );
+  }
+
+  const budget = await getExaBudget(c.env.DB, c.env);
+
+  if (budget.remaining <= 0) {
+    return c.json(
+      {
+        error:
+          "Events search budget reached. Try again after cached results are available or raise EXA_SEARCH_MONTHLY_LIMIT.",
+      },
+      429,
+    );
+  }
+
+  const maxQueries = Math.min(
+    toPositiveInteger(c.env.EXA_EVENTS_MAX_QUERIES, DEFAULT_EXA_EVENTS_MAX_QUERIES),
+    budget.remaining,
+  );
+  const queries = buildEventQueries(
+    parseJson(search.queries_json, []),
+    search.geography,
+    maxQueries,
+  );
+
+  if (queries.length === 0) {
+    return c.json({ error: "No search queries are available for this analysis." }, 422);
+  }
+
+  let events;
+
+  try {
+    events = await searchExaEvents(c.env, queries, search.geography);
+  } catch (error) {
+    return c.json(
+      { error: error.message || "Exa events search failed." },
+      error.status || 502,
+    );
+  }
+
+  await c.env.DB.prepare(
+    `INSERT INTO events_cache (id, search_id, domain, geography, events_json)
+     VALUES (?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      crypto.randomUUID(),
+      search.id,
+      search.domain,
+      search.geography,
+      JSON.stringify(events),
+    )
+    .run();
+
+  await Promise.all(
+    queries.map(() =>
+      recordAnalytics(c.env.DB, "events_exa_call", {
+        domain: search.domain,
+        geography: search.geography,
+        searchId: search.id,
+        queryCount: queries.length,
+        eventCount: events.length,
+      }),
+    ),
+  );
+
+  return c.json({
+    searchId: search.id,
+    domain: search.domain,
+    geography: search.geography,
+    cached: false,
+    events,
+    budget: {
+      monthlyLimit: budget.limit,
+      callsRemainingAfterThis: Math.max(0, budget.remaining - queries.length),
+    },
+  });
+});
+
 function normalizeDomain(value) {
   if (typeof value !== "string") {
     return null;
@@ -176,10 +304,15 @@ async function getCachedAnalysis(db, domain, geography) {
 }
 
 async function getAnalyzeBudget(db, env) {
-  const limit = toPositiveInteger(
-    env.OPENAI_ANALYZE_MONTHLY_LIMIT,
-    DEFAULT_ANALYZE_MONTHLY_LIMIT,
-  );
+  return getCallBudget(db, "analyze_openai_call", env.OPENAI_ANALYZE_MONTHLY_LIMIT, DEFAULT_ANALYZE_MONTHLY_LIMIT);
+}
+
+async function getExaBudget(db, env) {
+  return getCallBudget(db, "events_exa_call", env.EXA_SEARCH_MONTHLY_LIMIT, DEFAULT_EXA_SEARCH_MONTHLY_LIMIT);
+}
+
+async function getCallBudget(db, eventName, configuredLimit, defaultLimit) {
+  const limit = toPositiveInteger(configuredLimit, defaultLimit);
   const row = await db
     .prepare(
       `SELECT COUNT(*) AS count
@@ -187,7 +320,7 @@ async function getAnalyzeBudget(db, env) {
        WHERE event_name = ?
          AND created_at >= datetime('now', '-30 days')`,
     )
-    .bind("analyze_openai_call")
+    .bind(eventName)
     .first();
   const used = Number(row?.count || 0);
 
@@ -196,6 +329,200 @@ async function getAnalyzeBudget(db, env) {
     used,
     remaining: Math.max(0, limit - used),
   };
+}
+
+async function getSearchForEvents(db, { searchId, domain, geography }) {
+  if (searchId) {
+    return db
+      .prepare(
+        `SELECT id, domain, geography, queries_json
+         FROM searches
+         WHERE id = ?
+         LIMIT 1`,
+      )
+      .bind(searchId)
+      .first();
+  }
+
+  if (!domain || !geography) {
+    return null;
+  }
+
+  return db
+    .prepare(
+      `SELECT id, domain, geography, queries_json
+       FROM searches
+       WHERE domain = ?
+         AND lower(geography) = lower(?)
+         AND queries_json IS NOT NULL
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(domain, geography)
+    .first();
+}
+
+async function getCachedEvents(db, searchId) {
+  return db
+    .prepare(
+      `SELECT events_json, created_at
+       FROM events_cache
+       WHERE search_id = ?
+         AND created_at >= datetime('now', ?)
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(searchId, `-${CACHE_TTL_HOURS} hours`)
+    .first();
+}
+
+function buildEventQueries(queries, geography, maxQueries) {
+  if (!Array.isArray(queries)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const result = [];
+
+  for (const raw of queries) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const base = raw.trim();
+    if (!base) {
+      continue;
+    }
+    const query = new RegExp(`\\b${escapeRegExp(geography)}\\b`, "i").test(base)
+      ? base
+      : `${base} ${geography}`;
+    const key = query.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(query);
+    if (result.length >= maxQueries) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+async function searchExaEvents(env, queries, geography) {
+  const numResults = toPositiveInteger(
+    env.EXA_RESULTS_PER_QUERY,
+    DEFAULT_EXA_RESULTS_PER_QUERY,
+  );
+  const maxEvents = toPositiveInteger(env.EXA_MAX_EVENTS, DEFAULT_EXA_MAX_EVENTS);
+
+  const responses = await Promise.all(
+    queries.map((query) => requestExaSearch(env.EXA_API_KEY, query, numResults)),
+  );
+
+  const byUrl = new Map();
+
+  for (const response of responses) {
+    for (const result of response.results || []) {
+      const event = toEventCard(result, geography);
+      if (!event) {
+        continue;
+      }
+      if (!byUrl.has(event.url)) {
+        byUrl.set(event.url, event);
+      }
+    }
+  }
+
+  return Array.from(byUrl.values()).slice(0, maxEvents);
+}
+
+async function requestExaSearch(apiKey, query, numResults) {
+  const response = await fetch(EXA_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query,
+      type: "auto",
+      numResults,
+      contents: {
+        summary: {
+          query:
+            "Extract the B2B event's name, its date or date range, and its location (city, country). Set isEvent to false if the page is not about a specific real-world or virtual event.",
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              eventName: { type: "string", description: "The event name" },
+              date: { type: "string", description: "Event date or date range" },
+              location: { type: "string", description: "City and country" },
+              isEvent: {
+                type: "boolean",
+                description: "Whether the page describes a specific event",
+              },
+            },
+            required: ["eventName", "isEvent"],
+          },
+        },
+      },
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message = data?.error || data?.message || "Exa events search failed.";
+    const error = new Error(
+      typeof message === "string" ? message : "Exa events search failed.",
+    );
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+function toEventCard(result, geography) {
+  const url = typeof result?.url === "string" ? result.url.trim() : "";
+  if (!url) {
+    return null;
+  }
+
+  const summary = parseJson(result.summary, null);
+
+  if (summary && summary.isEvent === false) {
+    return null;
+  }
+
+  const name = cleanText(summary?.eventName) || cleanText(result.title);
+  if (!name) {
+    return null;
+  }
+
+  return {
+    name,
+    date: cleanText(summary?.date) || null,
+    location: cleanText(summary?.location) || geography,
+    url,
+  };
+}
+
+function cleanText(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const trimmed = value.trim();
+  if (!trimmed || /^(unknown|n\/?a|none|null)$/i.test(trimmed)) {
+    return "";
+  }
+  return trimmed;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function requestOpenAiAnalysis(env, domain, geography) {
