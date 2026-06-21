@@ -713,33 +713,44 @@ async function getCachedAnalysis(db, domain, geography) {
     .first();
 }
 
+// The research cache is an optimization, not a hard dependency. If its table is
+// missing (migration not yet applied) or D1 errors, degrade to a fresh analysis
+// rather than 500-ing the core /api/analyze endpoint.
 async function getCachedResearch(db, domain) {
-  return db
-    .prepare(
-      `SELECT profile_json, source_urls_json, created_at
-       FROM company_research
-       WHERE domain = ?
-         AND created_at >= datetime('now', ?)
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    )
-    .bind(domain, `-${CACHE_TTL_HOURS} hours`)
-    .first();
+  try {
+    return await db
+      .prepare(
+        `SELECT profile_json, source_urls_json, created_at
+         FROM company_research
+         WHERE domain = ?
+           AND created_at >= datetime('now', ?)
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .bind(domain, `-${CACHE_TTL_HOURS} hours`)
+      .first();
+  } catch {
+    return null;
+  }
 }
 
 async function saveCompanyResearch(db, domain, profile, sources) {
-  await db
-    .prepare(
-      `INSERT INTO company_research (id, domain, profile_json, source_urls_json)
-       VALUES (?, ?, ?, ?)`,
-    )
-    .bind(
-      crypto.randomUUID(),
-      domain,
-      JSON.stringify(profile),
-      JSON.stringify(toStringArray(sources)),
-    )
-    .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO company_research (id, domain, profile_json, source_urls_json)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        domain,
+        JSON.stringify(profile),
+        JSON.stringify(toStringArray(sources)),
+      )
+      .run();
+  } catch {
+    // Non-fatal — the analysis is still returned to the caller.
+  }
 }
 
 async function getAnalyzeBudget(db, env) {
