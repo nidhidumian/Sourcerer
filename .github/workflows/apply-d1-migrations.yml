@@ -32,5 +32,14 @@ jobs:
         working-directory: workers/api
 
       - name: Apply production D1 migrations
-        run: npx wrangler d1 migrations apply sourcerer-db --remote
+        run: |
+          set -o pipefail
+          npx wrangler d1 migrations apply sourcerer-db --remote 2>&1 | tee migration-output.log
         working-directory: workers/api
+
+      - name: Upload migration output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-migration-output
+          path: workers/api/migration-output.log
