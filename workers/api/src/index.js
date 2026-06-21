@@ -18,7 +18,7 @@ const DEFAULT_FIRECRAWL_STORY_CHARS = 6000;
 const MAX_CUSTOMER_STORIES = 2;
 // Homepage link paths that usually point at customer stories / case studies.
 const STORY_PATH_PATTERNS = [
-  /\/customer-stories?/i,
+  /\/customer-stor(?:y|ies)/i,
   /\/customers?\b/i,
   /\/case-stud/i,
   /\/success-stor/i,
@@ -428,7 +428,9 @@ app.post("/api/analyze", async (c) => {
   let profile = null;
   let queries = [];
   let researchSource = "domain";
-  let budget = { limit: 0, remaining: 1 };
+  let consumedCall = false;
+  // Always fetch the real budget so the response is accurate even on a cache hit.
+  const budget = await getAnalyzeBudget(c.env.DB, c.env);
 
   // 1. Reuse a recent per-domain research profile (geography-independent).
   const cachedResearch = await getCachedResearch(c.env.DB, domain);
@@ -442,7 +444,6 @@ app.post("/api/analyze", async (c) => {
 
   // 2. Otherwise run a fresh analysis (Firecrawl research preferred).
   if (!profile) {
-    budget = await getAnalyzeBudget(c.env.DB, c.env);
     if (budget.remaining <= 0) {
       return c.json(
         {
@@ -463,6 +464,7 @@ app.post("/api/analyze", async (c) => {
         await saveCompanyResearch(c.env.DB, domain, profile, result.sources);
       } catch (error) {
         // Fall back to the domain-only analysis below if scraping/research fails.
+        console.error(`Firecrawl research failed for ${domain}:`, error?.message || error);
         result = null;
       }
     }
@@ -482,6 +484,7 @@ app.post("/api/analyze", async (c) => {
       }
     }
 
+    consumedCall = true;
     await recordAnalytics(c.env.DB, "analyze_openai_call", {
       domain,
       geography,
@@ -511,7 +514,7 @@ app.post("/api/analyze", async (c) => {
     queries,
     budget: {
       monthlyLimit: budget.limit,
-      callsRemainingAfterThis: Math.max(0, budget.remaining - 1),
+      callsRemainingAfterThis: Math.max(0, budget.remaining - (consumedCall ? 1 : 0)),
     },
   });
 });
@@ -713,33 +716,44 @@ async function getCachedAnalysis(db, domain, geography) {
     .first();
 }
 
+// The research cache is an optimization, not a hard dependency. If its table is
+// missing (migration not yet applied) or D1 errors, degrade to a fresh analysis
+// rather than 500-ing the core /api/analyze endpoint.
 async function getCachedResearch(db, domain) {
-  return db
-    .prepare(
-      `SELECT profile_json, source_urls_json, created_at
-       FROM company_research
-       WHERE domain = ?
-         AND created_at >= datetime('now', ?)
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    )
-    .bind(domain, `-${CACHE_TTL_HOURS} hours`)
-    .first();
+  try {
+    return await db
+      .prepare(
+        `SELECT profile_json, source_urls_json, created_at
+         FROM company_research
+         WHERE domain = ?
+           AND created_at >= datetime('now', ?)
+         ORDER BY created_at DESC
+         LIMIT 1`,
+      )
+      .bind(domain, `-${CACHE_TTL_HOURS} hours`)
+      .first();
+  } catch {
+    return null;
+  }
 }
 
 async function saveCompanyResearch(db, domain, profile, sources) {
-  await db
-    .prepare(
-      `INSERT INTO company_research (id, domain, profile_json, source_urls_json)
-       VALUES (?, ?, ?, ?)`,
-    )
-    .bind(
-      crypto.randomUUID(),
-      domain,
-      JSON.stringify(profile),
-      JSON.stringify(toStringArray(sources)),
-    )
-    .run();
+  try {
+    await db
+      .prepare(
+        `INSERT INTO company_research (id, domain, profile_json, source_urls_json)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        domain,
+        JSON.stringify(profile),
+        JSON.stringify(toStringArray(sources)),
+      )
+      .run();
+  } catch {
+    // Non-fatal — the analysis is still returned to the caller.
+  }
 }
 
 async function getAnalyzeBudget(db, env) {
