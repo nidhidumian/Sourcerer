@@ -143,12 +143,19 @@
     font-weight: 500;
   }
 
-  .home-hero p {
+  .hero-copy p {
     width: min(100%, 720px);
     margin: 32px 0 0;
     color: var(--sourcerer-earth);
     font-size: 20px;
     line-height: 1.5;
+  }
+
+  .hero-copy .hero-eyebrow {
+    width: auto;
+    margin: 0 0 14px;
+    font-size: 10px;
+    line-height: 1.2;
   }
 
   .search-row {
@@ -331,7 +338,8 @@
     font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.16em;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
     text-transform: uppercase;
   }
 
@@ -501,8 +509,12 @@
     font-size: 48px;
   }
 
-  .home-hero p {
+  .hero-copy p {
     font-size: 18px;
+  }
+
+  .hero-copy .hero-eyebrow {
+    font-size: 10px;
   }
 
   .search-row {
