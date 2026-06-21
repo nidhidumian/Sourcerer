@@ -222,12 +222,14 @@ function App() {
                 <ul className="event-card-list">
                   {eventList.map((item) => (
                     <li className="event-card" key={item.url}>
-                      <h3 className="event-name">{item.name}</h3>
                       {item.organizer ? (
                         <p className="event-organizer">{item.organizer}</p>
                       ) : null}
-                      {item.description ? (
-                        <p className="event-description">{item.description}</p>
+                      <h3 className="event-name">{item.name}</h3>
+                      {item.why || item.description ? (
+                        <p className="event-description">
+                          {item.why || item.description}
+                        </p>
                       ) : null}
                       <dl className="event-meta">
                         <div>
@@ -239,13 +241,20 @@ function App() {
                           <dd>{item.location || "TBD"}</dd>
                         </div>
                       </dl>
-                      {item.priorYear &&
+                      {isTbd(item.date) &&
+                      item.priorYear &&
                       (item.priorYear.date || item.priorYear.location) ? (
                         <p className="event-prioryear">
                           Last year:{" "}
                           {[item.priorYear.date, item.priorYear.location]
                             .filter(Boolean)
                             .join(" · ")}
+                        </p>
+                      ) : null}
+                      {item.competitorSponsors &&
+                      item.competitorSponsors.length > 0 ? (
+                        <p className="event-sponsors">
+                          Last year sponsors: {item.competitorSponsors.join(", ")}
                         </p>
                       ) : null}
                       {item.agenda && item.agenda.length > 0 ? (
@@ -259,12 +268,6 @@ function App() {
                           <dt>SPEAKERS</dt>
                           <dd>{item.speakers.join(" · ")}</dd>
                         </div>
-                      ) : null}
-                      {item.competitorSponsors &&
-                      item.competitorSponsors.length > 0 ? (
-                        <p className="event-sponsors">
-                          Last year sponsors: {item.competitorSponsors.join(", ")}
-                        </p>
                       ) : null}
                       <div className="event-pills">
                         <a
@@ -282,12 +285,18 @@ function App() {
                         >
                           WISHLIST
                         </button>
-                        <a
+                        <button
                           className="event-pill"
-                          href={sponsorshipMailto(item, companyName)}
+                          type="button"
+                          onClick={() => {
+                            window.location.href = sponsorshipMailto(
+                              item,
+                              companyName,
+                            );
+                          }}
                         >
                           REQUEST SPONSORSHIP KIT
-                        </a>
+                        </button>
                       </div>
                     </li>
                   ))}
@@ -332,6 +341,10 @@ function App() {
 
 function formatList(value) {
   return Array.isArray(value) ? value.join(", ") : "";
+}
+
+function isTbd(value) {
+  return !value || /^tbd$/i.test(String(value).trim());
 }
 
 function sponsorshipMailto(event, company) {
