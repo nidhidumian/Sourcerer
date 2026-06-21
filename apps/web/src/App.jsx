@@ -14,8 +14,10 @@ function App() {
   const [events, setEvents] = useState(null);
   const [eventsError, setEventsError] = useState("");
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+  const [showWishlistNote, setShowWishlistNote] = useState(false);
   const profile = analysis?.profile;
   const eventList = events?.events;
+  const companyName = profile?.companyName || analysis?.domain || "our team";
 
   useEffect(() => {
     const searchId = analysis?.searchId;
@@ -221,28 +223,72 @@ function App() {
                   {eventList.map((item) => (
                     <li className="event-card" key={item.url}>
                       <h3 className="event-name">{item.name}</h3>
+                      {item.organizer ? (
+                        <p className="event-organizer">{item.organizer}</p>
+                      ) : null}
+                      {item.description ? (
+                        <p className="event-description">{item.description}</p>
+                      ) : null}
                       <dl className="event-meta">
-                        {item.date ? (
-                          <div>
-                            <dt>DATE</dt>
-                            <dd>{item.date}</dd>
-                          </div>
-                        ) : null}
-                        {item.location ? (
-                          <div>
-                            <dt>LOCATION</dt>
-                            <dd>{item.location}</dd>
-                          </div>
-                        ) : null}
+                        <div>
+                          <dt>DATE</dt>
+                          <dd>{item.date || "TBD"}</dd>
+                        </div>
+                        <div>
+                          <dt>LOCATION</dt>
+                          <dd>{item.location || "TBD"}</dd>
+                        </div>
                       </dl>
-                      <a
-                        className="event-link"
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                      >
-                        VISIT EVENT
-                      </a>
+                      {item.priorYear &&
+                      (item.priorYear.date || item.priorYear.location) ? (
+                        <p className="event-prioryear">
+                          Last year:{" "}
+                          {[item.priorYear.date, item.priorYear.location]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      ) : null}
+                      {item.agenda && item.agenda.length > 0 ? (
+                        <div className="event-extra">
+                          <dt>AGENDA</dt>
+                          <dd>{item.agenda.join(" · ")}</dd>
+                        </div>
+                      ) : null}
+                      {item.speakers && item.speakers.length > 0 ? (
+                        <div className="event-extra">
+                          <dt>SPEAKERS</dt>
+                          <dd>{item.speakers.join(" · ")}</dd>
+                        </div>
+                      ) : null}
+                      {item.competitorSponsors &&
+                      item.competitorSponsors.length > 0 ? (
+                        <p className="event-sponsors">
+                          Last year sponsors: {item.competitorSponsors.join(", ")}
+                        </p>
+                      ) : null}
+                      <div className="event-pills">
+                        <a
+                          className="event-pill"
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          VISIT EVENT
+                        </a>
+                        <button
+                          className="event-pill"
+                          type="button"
+                          onClick={() => setShowWishlistNote(true)}
+                        >
+                          WISHLIST
+                        </button>
+                        <a
+                          className="event-pill"
+                          href={sponsorshipMailto(item, companyName)}
+                        >
+                          REQUEST SPONSORSHIP KIT
+                        </a>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -254,12 +300,45 @@ function App() {
           </section>
         ) : null}
       </main>
+
+      {showWishlistNote ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="wishlist-title"
+          onClick={() => setShowWishlistNote(false)}
+        >
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <p className="events-kicker" id="wishlist-title">
+              WISHLIST
+            </p>
+            <p className="modal-body">
+              Sign up coming soon. We&apos;ll let you save events soon.
+            </p>
+            <button
+              className="event-pill"
+              type="button"
+              onClick={() => setShowWishlistNote(false)}
+            >
+              GOT IT
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 function formatList(value) {
   return Array.isArray(value) ? value.join(", ") : "";
+}
+
+function sponsorshipMailto(event, company) {
+  const to = event.sponsorshipEmail || "";
+  const subject = `Sponsorship kit request — ${event.name}`;
+  const body = `Hi, I'm from ${company}. I'd like to request a media kit/sponsorship brochure for ${event.name}. We're exploring sponsorship opportunities.`;
+  return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 export default App;
