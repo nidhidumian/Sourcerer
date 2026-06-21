@@ -280,6 +280,101 @@
     border-top: 1px solid rgba(22, 19, 15, 0.24);
   }
 
+  .events-feedback {
+    width: min(100%, 720px);
+    margin-top: 32px;
+  }
+
+  .events-kicker {
+    margin: 0;
+    color: var(--muted);
+    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .event-card-list {
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .event-card {
+    padding: 24px;
+    border: 1px solid var(--sourcerer-ink);
+    background: var(--sourcerer-cream);
+    color: var(--sourcerer-ink);
+  }
+
+  .event-card:nth-child(even) {
+    background: var(--sourcerer-ink);
+    color: var(--paper);
+  }
+
+  .event-name {
+    margin: 0;
+    font-size: 24px;
+    font-style: italic;
+    font-weight: 500;
+    line-height: 1.12;
+  }
+
+  .event-meta {
+    margin: 16px 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 32px;
+  }
+
+  .event-meta div {
+    margin: 0;
+  }
+
+  .event-meta dt {
+    margin: 0 0 4px;
+    color: var(--muted);
+    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  .event-card:nth-child(even) .event-meta dt {
+    color: rgba(251, 248, 244, 0.66);
+  }
+
+  .event-meta dd {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.45;
+  }
+
+  .event-link {
+    display: inline-block;
+    margin-top: 20px;
+    padding: 10px 16px;
+    background: var(--sourcerer-ink);
+    color: var(--paper);
+    font-family: "JetBrains Mono", "IBM Plex Mono", monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .event-card:nth-child(even) .event-link {
+    background: var(--paper);
+    color: var(--sourcerer-ink);
+  }
+
   .sr-only {
     position: absolute;
     width: 1px;
