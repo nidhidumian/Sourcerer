@@ -6,16 +6,48 @@ const app = new Hono();
 const CACHE_TTL_HOURS = 24;
 const DEFAULT_ANALYZE_MONTHLY_LIMIT = 300;
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;
+const DEFAULT_RESEARCH_MAX_OUTPUT_TOKENS = 1600;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
+// TICKET-006 — Firecrawl is used to scrape the homepage + customer stories so
+// the profile is grounded in real site content instead of a domain guess.
+const FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v1/scrape";
+const DEFAULT_FIRECRAWL_HOMEPAGE_CHARS = 9000;
+const DEFAULT_FIRECRAWL_STORY_CHARS = 6000;
+const MAX_CUSTOMER_STORIES = 2;
+// Homepage link paths that usually point at customer stories / case studies.
+const STORY_PATH_PATTERNS = [
+  /\/customer-stories?/i,
+  /\/customers?\b/i,
+  /\/case-stud/i,
+  /\/success-stor/i,
+  /\/stories\b/i,
+  /\/case-study/i,
+  /\/resources?\/.*case/i,
+];
+
 const EXA_SEARCH_URL = "https://api.exa.ai/search";
 const DEFAULT_EXA_SEARCH_MONTHLY_LIMIT = 300;
-const DEFAULT_EXA_EVENTS_MAX_QUERIES = 4;
+const DEFAULT_EXA_EVENTS_MAX_QUERIES = 10;
 const DEFAULT_EXA_RESULTS_PER_QUERY = 5;
 const DEFAULT_EXA_MAX_EVENTS = 12;
 const DEFAULT_EVENTS_LOOKAHEAD_MONTHS = 12;
-const DEFAULT_EVENTS_CACHE_VERSION = "3";
+const DEFAULT_EVENTS_CACHE_VERSION = "4";
+
+// Known predatory / spam conference aggregators to drop from results. Operators
+// can extend this at runtime via the EVENTS_SPAM_DOMAINS env var.
+const SPAM_HOST_SUBSTRINGS = [
+  "scitechseries",
+  "sciencefather",
+  "sciedutech",
+  "conferenceseries",
+  "alliedacademies",
+  "waset.org",
+  "iastem",
+  "researchfora",
+  "iferp",
+];
 
 // Canonical country -> known aliases (all lower case). Used for the strict
 // geography gate. Kept intentionally small; unknown geographies fall back to a
@@ -53,6 +85,27 @@ const COUNTRY_ALIASES = {
   australia: ["australia"],
   "united arab emirates": ["united arab emirates", "uae"],
 };
+
+// US state names + 2-letter abbreviations, used to infer "United States" from a
+// grounded location string (e.g. "Austin, TX" / "Las Vegas, Nevada") when the
+// country is not spelled out. "georgia" is intentionally omitted (country clash).
+const US_STATE_NAMES = new Set([
+  "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+  "connecticut", "delaware", "florida", "hawaii", "idaho", "illinois",
+  "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland",
+  "massachusetts", "michigan", "minnesota", "mississippi", "missouri",
+  "montana", "nebraska", "nevada", "new hampshire", "new jersey", "new mexico",
+  "new york", "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
+  "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee",
+  "texas", "utah", "vermont", "virginia", "washington", "west virginia",
+  "wisconsin", "wyoming", "district of columbia",
+]);
+const US_STATE_ABBREVS = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",
+  "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+  "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+  "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+]);
 
 // Small curated flagship map. Each entry is a major recurring B2B event tied to a
 // known country. It is shown as a TBD anchor only when its country matches the
@@ -372,32 +425,74 @@ app.post("/api/analyze", async (c) => {
     );
   }
 
-  const budget = await getAnalyzeBudget(c.env.DB, c.env);
+  let profile = null;
+  let queries = [];
+  let researchSource = "domain";
+  let budget = { limit: 0, remaining: 1 };
 
-  if (budget.remaining <= 0) {
-    return c.json(
-      {
-        error:
-          "Analyze budget reached. Try again after cached results are available or raise OPENAI_ANALYZE_MONTHLY_LIMIT.",
-      },
-      429,
-    );
+  // 1. Reuse a recent per-domain research profile (geography-independent).
+  const cachedResearch = await getCachedResearch(c.env.DB, domain);
+  if (cachedResearch) {
+    profile = parseJson(cachedResearch.profile_json, null);
+    if (profile) {
+      queries = toStringArray(profile.searchQueries);
+      researchSource = "research-cache";
+    }
   }
 
-  let openAiResult;
+  // 2. Otherwise run a fresh analysis (Firecrawl research preferred).
+  if (!profile) {
+    budget = await getAnalyzeBudget(c.env.DB, c.env);
+    if (budget.remaining <= 0) {
+      return c.json(
+        {
+          error:
+            "Analyze budget reached. Try again after cached results are available or raise OPENAI_ANALYZE_MONTHLY_LIMIT.",
+        },
+        429,
+      );
+    }
 
-  try {
-    openAiResult = await requestOpenAiAnalysis(c.env, domain, geography);
-  } catch (error) {
-    return c.json(
-      { error: error.message || "OpenAI analysis failed." },
-      error.status || 502,
-    );
+    let result = null;
+    if (c.env.FIRECRAWL_API_KEY) {
+      try {
+        result = await requestCompanyResearch(c.env, domain, geography);
+        researchSource = "firecrawl";
+        profile = result.profile;
+        queries = result.queries;
+        await saveCompanyResearch(c.env.DB, domain, profile, result.sources);
+      } catch (error) {
+        // Fall back to the domain-only analysis below if scraping/research fails.
+        result = null;
+      }
+    }
+
+    if (!profile) {
+      try {
+        const legacy = await requestOpenAiAnalysis(c.env, domain, geography);
+        profile = toProfile(legacy.analysis);
+        queries = toStringArray(legacy.analysis.search_queries);
+        result = legacy;
+        researchSource = c.env.FIRECRAWL_API_KEY ? "domain-fallback" : "domain";
+      } catch (error) {
+        return c.json(
+          { error: error.message || "OpenAI analysis failed." },
+          error.status || 502,
+        );
+      }
+    }
+
+    await recordAnalytics(c.env.DB, "analyze_openai_call", {
+      domain,
+      geography,
+      model: result?.model || null,
+      researchSource,
+      sourceCount: toStringArray(profile.researchSources).length,
+      usage: result?.usage || null,
+    });
   }
 
   const searchId = crypto.randomUUID();
-  const profile = toProfile(openAiResult.analysis);
-  const queries = openAiResult.analysis.search_queries;
 
   await c.env.DB.prepare(
     `INSERT INTO searches (id, domain, geography, profile_json, queries_json)
@@ -406,19 +501,12 @@ app.post("/api/analyze", async (c) => {
     .bind(searchId, domain, geography, JSON.stringify(profile), JSON.stringify(queries))
     .run();
 
-  await recordAnalytics(c.env.DB, "analyze_openai_call", {
-    domain,
-    geography,
-    model: openAiResult.model,
-    searchId,
-    usage: openAiResult.usage,
-  });
-
   return c.json({
     searchId,
     domain,
     geography,
     cached: false,
+    researchSource,
     profile,
     queries,
     budget: {
@@ -494,11 +582,15 @@ app.get("/api/events", async (c) => {
     toPositiveInteger(c.env.EXA_EVENTS_MAX_QUERIES, DEFAULT_EXA_EVENTS_MAX_QUERIES),
     budget.remaining,
   );
-  const queries = buildEventQueries(
-    parseJson(search.queries_json, []),
-    search.geography,
-    maxQueries,
-  );
+  // Multi-angle planner from the enriched profile; fall back to stored queries.
+  let queries = buildEventQueryPlan(profile, search.geography, maxQueries);
+  if (queries.length === 0) {
+    queries = buildEventQueries(
+      parseJson(search.queries_json, []),
+      search.geography,
+      maxQueries,
+    );
+  }
 
   if (queries.length === 0) {
     return c.json({ error: "No search queries are available for this analysis." }, 422);
@@ -523,6 +615,7 @@ app.get("/api/events", async (c) => {
       DEFAULT_EVENTS_LOOKAHEAD_MONTHS,
     ),
     maxEvents: toPositiveInteger(c.env.EXA_MAX_EVENTS, DEFAULT_EXA_MAX_EVENTS),
+    spamHosts: parseSpamHosts(c.env.EVENTS_SPAM_DOMAINS),
   });
 
   await c.env.DB.prepare(
@@ -618,6 +711,35 @@ async function getCachedAnalysis(db, domain, geography) {
     )
     .bind(domain, geography, `-${CACHE_TTL_HOURS} hours`)
     .first();
+}
+
+async function getCachedResearch(db, domain) {
+  return db
+    .prepare(
+      `SELECT profile_json, source_urls_json, created_at
+       FROM company_research
+       WHERE domain = ?
+         AND created_at >= datetime('now', ?)
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    )
+    .bind(domain, `-${CACHE_TTL_HOURS} hours`)
+    .first();
+}
+
+async function saveCompanyResearch(db, domain, profile, sources) {
+  await db
+    .prepare(
+      `INSERT INTO company_research (id, domain, profile_json, source_urls_json)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .bind(
+      crypto.randomUUID(),
+      domain,
+      JSON.stringify(profile),
+      JSON.stringify(toStringArray(sources)),
+    )
+    .run();
 }
 
 async function getAnalyzeBudget(db, env) {
@@ -724,6 +846,120 @@ function buildEventQueries(queries, geography, maxQueries) {
   }
 
   return result;
+}
+
+// TICKET-006 Part B — generate 8-12 intentional Exa queries the way an event
+// marketer would search: broad category + geography, vertical/use-case angles,
+// adjacent markets, and named industry anchors. Never just the domain or oneLiner.
+function buildEventQueryPlan(profile, geography, maxQueries) {
+  if (!profile || typeof profile !== "object") {
+    return [];
+  }
+
+  const g = (geography || "").trim();
+  // Strip trailing event-type words ("... conferences" / "... summit") so we
+  // don't produce "customer experience conferences conferences USA".
+  const themes = dedupeStrings(
+    [
+      ...toStringArray(profile.eventSearchThemes),
+      ...toStringArray(profile.recommendedEventTypes),
+    ].map(stripEventTypeWords),
+  );
+  const verticalsAndUseCases = dedupeStrings([
+    ...toStringArray(profile.verticals),
+    ...toStringArray(profile.useCases),
+  ]);
+  const adjacents = adjacentMarketTopics(profile.adjacentMarkets);
+
+  const broad = [];
+  for (const theme of themes.slice(0, 3)) {
+    broad.push(`${theme} conferences ${g}`);
+    broad.push(`${theme} trade shows ${g}`);
+  }
+
+  const angle = themes[0] || stripEventTypeWords(profile.industry) || "industry";
+  const verticalQueries = verticalsAndUseCases
+    .slice(0, 4)
+    .map((vertical) => `${vertical} ${angle} events ${g}`);
+
+  const adjacentQueries = adjacents
+    .slice(0, 2)
+    .map((topic) => `${topic} innovation summit ${g}`);
+
+  const anchorQueries = matchedFlagships(profile, geography)
+    .slice(0, 3)
+    .map((flagship) => `${flagship.name} ${g}`);
+
+  // Interleave by priority then cap: guarantees broad coverage plus angles.
+  const ordered = [
+    ...broad.slice(0, 4),
+    ...verticalQueries.slice(0, 3),
+    ...adjacentQueries,
+    ...anchorQueries,
+    ...broad.slice(4),
+  ];
+
+  const seen = new Set();
+  const result = [];
+  for (const raw of ordered) {
+    const query = raw.replace(/\s+/g, " ").trim();
+    const key = query.toLowerCase();
+    if (!query || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(query);
+    if (result.length >= maxQueries) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function adjacentMarketTopics(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const topics = value
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return entry;
+      }
+      return entry && typeof entry.market === "string" ? entry.market : "";
+    })
+    .filter(Boolean);
+  return dedupeStrings(topics);
+}
+
+function stripEventTypeWords(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value
+    .replace(
+      /\b(conferences?|trade ?shows?|summits?|expos?|events?|forums?|shows?|congress(?:es)?|conventions?|symposi(?:um|a)|weeks?|fairs?|meetups?)\b/gi,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeStrings(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    const key = trimmed.toLowerCase();
+    if (trimmed && !seen.has(key)) {
+      seen.add(key);
+      out.push(trimmed);
+    }
+  }
+  return out;
 }
 
 async function searchExaEvents(env, queries) {
@@ -894,10 +1130,12 @@ function toRawEvent(result) {
 
 // Apply the full quality pipeline: strict geography gate, date window, relevance
 // (fail open), flagship anchors, grounded competitor line, sort, and cap.
-function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvents }) {
+function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvents, spamHosts }) {
   const byKey = new Map();
   const addEvent = (event) => {
-    const key = (event.url || event.name).toLowerCase();
+    // Dedupe by normalized event name + URL so the same series from two
+    // different query angles collapses into one card.
+    const key = `${normalizeEventName(event.name)}|${(event.url || "").toLowerCase()}`;
     if (!byKey.has(key)) {
       byKey.set(key, event);
     }
@@ -911,6 +1149,9 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
   }
 
   let events = Array.from(byKey.values());
+
+  // Block obvious predatory / spam conference aggregators.
+  events = events.filter((event) => !isSpamEvent(event, spamHosts));
 
   // Strict geography hard gate — applies to ALL events (flagship included).
   events = events.filter((event) => geographyMatchState(event, geography) === "match");
@@ -934,8 +1175,11 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
     return event._startDate >= tomorrow && event._startDate <= windowEnd;
   });
 
-  // Relevance filter — applies to ALL events incl. curated flagships (they are
-  // not auto-included). Fail open if it would empty the list.
+  // Relevance filter keyed off the company's OWN focus (industry + product +
+  // recommended event types + search themes + use cases) — NOT the customer
+  // verticals it sells into. Fail OPEN: if it would empty the list, keep the
+  // best geography-matched results so we never return zero when Exa found real
+  // events in geography.
   const relevanceTerms = buildRelevanceTerms(profile);
   if (relevanceTerms.length > 0) {
     const matched = events.filter((event) =>
@@ -962,12 +1206,16 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
   return events.slice(0, maxEvents).map(finalizeCard);
 }
 
-function curatedFlagships(profile, geography) {
-  // Match flagships against the company's OWN category (industry/product), NOT the
-  // customer verticals/ICP it sells into — otherwise a dev-security company whose
-  // verticals list "Fintech"/"Healthcare" would wrongly anchor Money20/20 & HIMSS.
+// Match flagships against the company's OWN category (industry/product/themes),
+// NOT the customer verticals/ICP it sells into — otherwise a dev-security company
+// whose verticals list "Fintech"/"Healthcare" would wrongly anchor Money20/20 &
+// HIMSS. A generic tag (saas/cloud/security/ai/...) can never anchor on its own.
+function matchedFlagships(profile, geography) {
   const focusTerms = buildFlagshipTerms(profile);
-  const recommendedText = toStringArray(profile.recommendedEventTypes)
+  const recommendedText = [
+    ...toStringArray(profile.recommendedEventTypes),
+    ...toStringArray(profile.eventSearchThemes),
+  ]
     .join(" ")
     .toLowerCase();
 
@@ -975,14 +1223,16 @@ function curatedFlagships(profile, geography) {
     if (canonicalCountry(flagship.country) !== canonicalCountry(geography)) {
       return false;
     }
-    // Require a SPECIFIC (non-generic) tag to match — generic tags like
-    // "saas"/"cloud"/"security" must never anchor a flagship on their own.
     const tagHit = flagship.tags.some(
       (tag) => !GENERIC_TAGS.has(tag) && focusTerms.has(tag),
     );
     const nameHit = recommendedText.includes(flagship.name.toLowerCase());
     return tagHit || nameHit;
-  }).map((flagship) => ({
+  });
+}
+
+function curatedFlagships(profile, geography) {
+  return matchedFlagships(profile, geography).map((flagship) => ({
     name: flagship.name,
     organizer: flagship.organizer,
     description: flagship.description || "",
@@ -1039,12 +1289,15 @@ function finalizeCard(event) {
 }
 
 function buildRelevanceTerms(profile) {
+  // The company's OWN focus — industry, product, recommended event types, search
+  // themes, and use cases. Deliberately excludes customer verticals/ICP, which
+  // previously pulled fintech/healthcare events for a dev-security company.
   const sources = [
     profile.industry,
     profile.productCategory,
-    ...toStringArray(profile.icp),
-    ...toStringArray(profile.verticals),
     ...toStringArray(profile.recommendedEventTypes),
+    ...toStringArray(profile.eventSearchThemes),
+    ...toStringArray(profile.useCases),
   ];
 
   const terms = new Set();
@@ -1070,6 +1323,7 @@ function buildFlagshipTerms(profile) {
     profile.industry,
     profile.productCategory,
     ...toStringArray(profile.recommendedEventTypes),
+    ...toStringArray(profile.eventSearchThemes),
   ];
   const words = new Set();
   for (const source of sources) {
@@ -1130,10 +1384,54 @@ function normalizeCompany(value) {
     .trim();
 }
 
+// Normalized event name used for dedupe across query angles. Strips a trailing
+// year so "RSA Conference 2025" and "RSA Conference" collapse together.
+function normalizeEventName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b(19|20)\d{2}\b/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function parseSpamHosts(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return SPAM_HOST_SUBSTRINGS;
+  }
+  const extra = value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return [...SPAM_HOST_SUBSTRINGS, ...extra];
+}
+
+function isSpamEvent(event, spamHosts) {
+  const hosts = Array.isArray(spamHosts) ? spamHosts : SPAM_HOST_SUBSTRINGS;
+  let host = "";
+  try {
+    host = new URL(event.url).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
+  if (host && hosts.some((needle) => host.includes(needle))) {
+    return true;
+  }
+  // Generic, industry-less "summit" aggregators with no real organizer.
+  const name = String(event.name || "").toLowerCase();
+  return /\b(international|world)\s+(conference|congress)\s+on\b/.test(name);
+}
+
 // Returns "match" | "nonmatch" | "unknown" for the strict geography gate.
 function geographyMatchState(event, geography) {
   const target = canonicalCountry(geography);
-  const candidates = [event.country, event.city, event.location].filter(Boolean);
+  // Prior-year location is grounded too — flagships/recurring events often only
+  // state where the last edition was held.
+  const candidates = [
+    event.country,
+    event.city,
+    event.location,
+    event.priorYearLocation,
+  ].filter(Boolean);
 
   // Confirmed match.
   for (const candidate of candidates) {
@@ -1146,6 +1444,12 @@ function geographyMatchState(event, geography) {
     }
   }
 
+  // Infer the United States from a grounded state abbreviation / name when the
+  // country is not spelled out (e.g. "Austin, TX" / "Las Vegas, Nevada").
+  if (target === "united states" && candidates.some(looksUnitedStates)) {
+    return "match";
+  }
+
   // Confirmed non-match (resolves to a different known country).
   for (const candidate of candidates) {
     const canonical = canonicalCountry(candidate);
@@ -1155,6 +1459,20 @@ function geographyMatchState(event, geography) {
   }
 
   return "unknown";
+}
+
+function looksUnitedStates(value) {
+  const text = String(value || "");
+  const lower = text.toLowerCase();
+  for (const name of US_STATE_NAMES) {
+    if (new RegExp(`\\b${name}\\b`).test(lower)) {
+      return true;
+    }
+  }
+  // Two-letter abbreviation in a "City, ST" tail (case-sensitive to avoid
+  // matching ordinary lowercase words like "in"/"or").
+  const abbrev = text.match(/,\s*([A-Z]{2})\b/);
+  return Boolean(abbrev && US_STATE_ABBREVS.has(abbrev[1]));
 }
 
 function canonicalCountry(value) {
@@ -1273,6 +1591,291 @@ function cleanEmail(value) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// TICKET-006 Part A — scrape homepage + customer stories with Firecrawl, then
+// have OpenAI extract an enriched profile grounded in that real content.
+async function requestCompanyResearch(env, domain, geography) {
+  const homepageUrl = `https://${domain}/`;
+  const homepage = await firecrawlScrape(
+    env,
+    homepageUrl,
+    toPositiveInteger(env.FIRECRAWL_HOMEPAGE_CHARS, DEFAULT_FIRECRAWL_HOMEPAGE_CHARS),
+  );
+
+  if (!homepage.markdown) {
+    const error = new Error("Firecrawl returned no homepage content.");
+    error.status = 502;
+    throw error;
+  }
+
+  const storyUrls = discoverStoryUrls(homepage.links, domain, MAX_CUSTOMER_STORIES);
+  const stories = [];
+  for (const url of storyUrls) {
+    try {
+      const story = await firecrawlScrape(
+        env,
+        url,
+        toPositiveInteger(env.FIRECRAWL_STORY_CHARS, DEFAULT_FIRECRAWL_STORY_CHARS),
+      );
+      if (story.markdown) {
+        stories.push({ url, markdown: story.markdown });
+      }
+    } catch {
+      // A failed story scrape is non-fatal — proceed with what we have.
+    }
+  }
+
+  const sources = [homepageUrl, ...stories.map((story) => story.url)];
+  const extraction = await requestResearchExtraction(env, {
+    domain,
+    geography,
+    homepage: homepage.markdown,
+    stories,
+  });
+
+  return {
+    profile: toEnrichedProfile(extraction.analysis, sources),
+    queries: toStringArray(extraction.analysis.search_queries),
+    model: extraction.model,
+    usage: extraction.usage,
+    sources,
+  };
+}
+
+async function firecrawlScrape(env, url, maxChars) {
+  const response = await fetch(FIRECRAWL_SCRAPE_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      url,
+      formats: ["markdown", "links"],
+      onlyMainContent: true,
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data?.success === false) {
+    const message =
+      (data && (data.error || data.message)) ||
+      `Firecrawl scrape failed (${response.status}).`;
+    const error = new Error(
+      typeof message === "string" ? message : "Firecrawl scrape failed.",
+    );
+    error.status = response.status;
+    throw error;
+  }
+
+  const payload = data?.data || {};
+  const markdown =
+    typeof payload.markdown === "string" ? payload.markdown.slice(0, maxChars) : "";
+  const links = Array.isArray(payload.links) ? payload.links : [];
+
+  return { markdown, links };
+}
+
+function discoverStoryUrls(links, domain, max) {
+  const seen = new Set();
+  const out = [];
+  for (const link of links) {
+    if (typeof link !== "string") {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = new URL(link);
+    } catch {
+      continue;
+    }
+    const host = parsed.hostname.replace(/^www\./, "").toLowerCase();
+    if (host !== domain && !host.endsWith(`.${domain}`)) {
+      continue;
+    }
+    const path = parsed.pathname.toLowerCase();
+    if (!STORY_PATH_PATTERNS.some((pattern) => pattern.test(path))) {
+      continue;
+    }
+    const key = `${parsed.origin}${parsed.pathname}`.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(`${parsed.origin}${parsed.pathname}`);
+    if (out.length >= max) {
+      break;
+    }
+  }
+  return out;
+}
+
+async function requestResearchExtraction(env, { domain, geography, homepage, stories }) {
+  const model = env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const maxOutputTokens = toPositiveInteger(
+    env.OPENAI_RESEARCH_MAX_OUTPUT_TOKENS,
+    DEFAULT_RESEARCH_MAX_OUTPUT_TOKENS,
+  );
+
+  const storyText = stories
+    .map((story, index) => `--- CUSTOMER STORY ${index + 1} (${story.url}) ---\n${story.markdown}`)
+    .join("\n\n");
+
+  const content = [
+    `Company domain: ${domain}`,
+    `Target geography: ${geography}`,
+    "",
+    "--- HOMEPAGE CONTENT (markdown) ---",
+    homepage,
+    storyText ? `\n${storyText}` : "",
+  ].join("\n");
+
+  const response = await fetch(OPENAI_RESPONSES_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "You are a B2B go-to-market research analyst building an event-marketing profile. Use ONLY the provided website content (homepage + customer stories) plus the domain to extract the company's offering, who buys it today, the use cases and verticals seen in their marketing/stories, plausible adjacent markets (with a short rationale each), competitors, and the kinds of events worth attending. Produce 5-10 concrete event search themes an event marketer would type into Google (e.g. 'customer experience conferences', 'contact center trade shows'). Ground every field in the content; infer cautiously and never invent customer names. Return only the requested JSON.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: content }],
+        },
+      ],
+      max_output_tokens: maxOutputTokens,
+      reasoning: { effort: "low" },
+      store: false,
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "b2b_company_research",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              company_name: { type: "string" },
+              one_liner: { type: "string" },
+              industry: { type: "string" },
+              product_category: { type: "string" },
+              core_icp: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 6 },
+              verticals: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+              use_cases: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 8 },
+              adjacent_markets: {
+                type: "array",
+                minItems: 0,
+                maxItems: 4,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    market: { type: "string" },
+                    rationale: { type: "string" },
+                  },
+                  required: ["market", "rationale"],
+                },
+              },
+              competitors: { type: "array", items: { type: "string" }, minItems: 0, maxItems: 6 },
+              recommended_event_types: {
+                type: "array",
+                items: { type: "string" },
+                minItems: 2,
+                maxItems: 6,
+              },
+              event_search_themes: {
+                type: "array",
+                items: { type: "string" },
+                minItems: 5,
+                maxItems: 10,
+              },
+              event_fit_score: { type: "integer", minimum: 0, maximum: 100 },
+              score_rationale: { type: "string" },
+              search_queries: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 10 },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+            },
+            required: [
+              "company_name",
+              "one_liner",
+              "industry",
+              "product_category",
+              "core_icp",
+              "verticals",
+              "use_cases",
+              "adjacent_markets",
+              "competitors",
+              "recommended_event_types",
+              "event_search_themes",
+              "event_fit_score",
+              "score_rationale",
+              "search_queries",
+              "confidence",
+            ],
+          },
+        },
+      },
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    return raiseOpenAiError(response.status, data);
+  }
+
+  const outputText = extractOutputText(data);
+  const analysis = parseJson(outputText, null);
+
+  if (!analysis) {
+    throw new Error("OpenAI returned an empty or invalid research payload.");
+  }
+
+  return { analysis, model, usage: data.usage || null };
+}
+
+function toEnrichedProfile(analysis, sources) {
+  const adjacentMarkets = Array.isArray(analysis.adjacent_markets)
+    ? analysis.adjacent_markets
+        .filter((entry) => entry && typeof entry.market === "string")
+        .map((entry) => ({
+          market: entry.market,
+          rationale: typeof entry.rationale === "string" ? entry.rationale : "",
+        }))
+    : [];
+
+  return {
+    companyName: analysis.company_name,
+    oneLiner: analysis.one_liner,
+    industry: analysis.industry,
+    productCategory: analysis.product_category,
+    icp: toStringArray(analysis.core_icp),
+    coreICP: toStringArray(analysis.core_icp),
+    verticals: toStringArray(analysis.verticals),
+    useCases: toStringArray(analysis.use_cases),
+    adjacentMarkets,
+    competitors: toStringArray(analysis.competitors),
+    eventFitScore: analysis.event_fit_score,
+    scoreRationale: analysis.score_rationale,
+    recommendedEventTypes: toStringArray(analysis.recommended_event_types),
+    eventSearchThemes: toStringArray(analysis.event_search_themes),
+    searchQueries: toStringArray(analysis.search_queries),
+    confidence: analysis.confidence,
+    researchSources: toStringArray(sources),
+  };
 }
 
 async function requestOpenAiAnalysis(env, domain, geography) {
