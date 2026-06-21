@@ -28,7 +28,6 @@ const COUNTRY_ALIASES = {
     "u.s.",
     "u.s.a.",
     "us",
-    "america",
   ],
   canada: ["canada"],
   "united kingdom": [
@@ -853,18 +852,21 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
 
 function curatedFlagships(profile, geography) {
   const terms = buildRelevanceTerms(profile);
-  const recommended = toStringArray(profile.recommendedEventTypes)
+  const recommendedText = toStringArray(profile.recommendedEventTypes)
     .join(" ")
     .toLowerCase();
+  // Word-level matching avoids short-tag substring false positives
+  // (e.g. "digital" contains "it", "chain" contains "ai").
+  const recommendedWords = new Set(recommendedText.split(/[^a-z0-9]+/).filter(Boolean));
 
   return FLAGSHIP_EVENTS.filter((flagship) => {
     if (canonicalCountry(flagship.country) !== canonicalCountry(geography)) {
       return false;
     }
     const tagHit = flagship.tags.some(
-      (tag) => recommended.includes(tag) || terms.includes(tag),
+      (tag) => recommendedWords.has(tag) || terms.includes(tag),
     );
-    const nameHit = recommended.includes(flagship.name.toLowerCase());
+    const nameHit = recommendedText.includes(flagship.name.toLowerCase());
     return tagHit || nameHit;
   }).map((flagship) => ({
     name: flagship.name,
