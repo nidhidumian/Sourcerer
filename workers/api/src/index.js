@@ -33,7 +33,7 @@ const DEFAULT_EXA_EVENTS_MAX_QUERIES = 10;
 const DEFAULT_EXA_RESULTS_PER_QUERY = 5;
 const DEFAULT_EXA_MAX_EVENTS = 12;
 const DEFAULT_EVENTS_LOOKAHEAD_MONTHS = 12;
-const DEFAULT_EVENTS_CACHE_VERSION = "4";
+const DEFAULT_EVENTS_CACHE_VERSION = "5";
 
 // Known predatory / spam conference aggregators to drop from results. Operators
 // can extend this at runtime via the EVENTS_SPAM_DOMAINS env var.
@@ -131,8 +131,8 @@ const GENERIC_TAGS = new Set([
 ]);
 
 // `lastYearSponsors` lists well-known sponsors/exhibitors of the prior edition.
-// It is intersected (case-insensitive) with the analyze competitor list — only
-// competitors that actually appear here are ever shown, never the raw list.
+// These are grounded names shown on the card (up to 5), with any analyze
+// competitors that appear here surfaced first.
 const FLAGSHIP_EVENTS = [
   {
     name: "AWS re:Invent",
@@ -1062,17 +1062,14 @@ async function requestExaSearch(apiKey, query, numResults) {
               agenda: {
                 type: "array",
                 items: { type: "string" },
-                description: "Key agenda topics or tracks",
-              },
-              speakers: {
-                type: "array",
-                items: { type: "string" },
-                description: "Notable speakers, if listed",
+                description:
+                  "Substantive agenda topics, session tracks, or themes only — exclude website navigation/section labels (Register, Sponsors, About, Venue, Past speakers, etc.)",
               },
               sponsors: {
                 type: "array",
                 items: { type: "string" },
-                description: "Sponsor or exhibitor company names, if listed",
+                description:
+                  "Sponsor or exhibitor company names from the most recent edition, if listed anywhere on the page (sponsors/exhibitors/partners sections)",
               },
               sponsorshipEmail: {
                 type: "string",
@@ -1133,7 +1130,6 @@ function toRawEvent(result) {
     priorYearDate: cleanText(summary?.priorYearDate),
     priorYearLocation: cleanText(summary?.priorYearLocation),
     agenda: cleanTextArray(summary?.agenda),
-    speakers: cleanTextArray(summary?.speakers),
     sponsors: cleanTextArray(summary?.sponsors),
     sponsorshipEmail:
       cleanEmail(summary?.sponsorshipEmail) || cleanEmail(summary?.contactEmail),
@@ -1204,10 +1200,12 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
     }
   }
 
-  // Grounded competitor sponsors line — additive only.
+  // Grounded "Last year sponsors" line — show extracted/known prior-edition
+  // sponsors on every event when data exists, with analyze competitors surfaced
+  // first. Additive only; never affects whether an event appears.
   const competitors = toStringArray(profile.competitors);
   for (const event of events) {
-    event._competitorSponsors = intersectCompetitors(competitors, event.sponsors);
+    event._lastYearSponsors = buildLastYearSponsors(event.sponsors, competitors);
   }
 
   // Sort chronologically; TBD / flagship pinned to the bottom.
@@ -1258,7 +1256,6 @@ function curatedFlagships(profile, geography) {
     priorYearDate: flagship.priorYearDate,
     priorYearLocation: flagship.priorYearLocation,
     agenda: [],
-    speakers: [],
     sponsors: flagship.lastYearSponsors || [],
     sponsorshipEmail: "",
     url: flagship.url,
@@ -1285,18 +1282,20 @@ function finalizeCard(event) {
         }
       : null;
 
+  const date = tbd ? "TBD" : event.dateText || formatEventDate(event._startDate);
+  const location = flagship ? "TBD" : locationKnown || "TBD";
+
   return {
     name: event.name,
     organizer: event.organizer || null,
     description: event.description || null,
-    date: tbd ? "TBD" : event.dateText || formatEventDate(event._startDate),
-    location: flagship ? "TBD" : locationKnown || "TBD",
+    date,
+    location,
     tbd,
     flagship,
     priorYear,
-    agenda: (event.agenda || []).slice(0, 5),
-    speakers: (event.speakers || []).slice(0, 5),
-    competitorSponsors: event._competitorSponsors || [],
+    agenda: cleanAgenda(event.agenda, { date, location, name: event.name }),
+    lastYearSponsors: event._lastYearSponsors || [],
     sponsorshipEmail: event.sponsorshipEmail || null,
     url: event.url,
   };
@@ -1367,27 +1366,128 @@ function eventMatchesRelevance(event, terms) {
   return terms.some((term) => haystack.includes(term));
 }
 
-function intersectCompetitors(competitors, sponsors) {
-  if (!competitors.length || !sponsors.length) {
+// Grounded prior-edition sponsors for a card. Competitor matches (from the
+// analyze profile) are surfaced first; remaining grounded sponsor names follow.
+// Capped at 5. Never invents names — returns [] when no grounded data exists.
+function buildLastYearSponsors(sponsors, competitors) {
+  const grounded = cleanTextArray(sponsors);
+  if (!grounded.length) {
     return [];
   }
+  const needles = toStringArray(competitors)
+    .map(normalizeCompany)
+    .filter(Boolean);
+  const isCompetitor = (name) => {
+    const hay = normalizeCompany(name);
+    if (!hay) {
+      return false;
+    }
+    return needles.some(
+      (needle) => hay === needle || hay.includes(needle) || needle.includes(hay),
+    );
+  };
+  const matched = grounded.filter(isCompetitor);
+  const rest = grounded.filter((name) => !isCompetitor(name));
+  return [...matched, ...rest].slice(0, 5);
+}
 
-  const matched = [];
-  for (const competitor of competitors) {
-    const needle = normalizeCompany(competitor);
-    if (!needle) {
+// Website nav / CTA / section labels that masquerade as agenda topics.
+const AGENDA_JUNK_PATTERNS = [
+  /^why\b/,
+  /^the venue$/,
+  /^venues?$/,
+  /^past speakers?$/,
+  /^speakers?$/,
+  /^dispatch$/,
+  /^register(ation)?$/,
+  /^sponsors?$/,
+  /^sponsorships?$/,
+  /^exhibit(ors|ing|ion)?$/,
+  /^about( us)?$/,
+  /^home$/,
+  /^contact( us)?$/,
+  /^tickets?$/,
+  /^get tickets$/,
+  /^buy tickets$/,
+  /^pricing$/,
+  /^faqs?$/,
+  /^agenda$/,
+  /^schedule$/,
+  /^programme?$/,
+  /^overview$/,
+  /^partners?$/,
+  /^media$/,
+  /^press$/,
+  /^blog$/,
+  /^news$/,
+  /^gallery$/,
+  /^travel$/,
+  /^hotels?$/,
+  /^accommodations?$/,
+  /^login$/,
+  /^sign ?in$/,
+  /^sign ?up$/,
+  /^menu$/,
+  /^search$/,
+  /^privacy/,
+  /^terms/,
+  /^cookies?/,
+  /^newsletter$/,
+  /^subscribe$/,
+  /^downloads?$/,
+  /^apply$/,
+  /^nominate$/,
+  /^learn more$/,
+  /^read more$/,
+  /^view all$/,
+  /^see all$/,
+  /^more info(rmation)?$/,
+  /^day \d+$/,
+];
+
+function normalizeAgendaItem(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isAgendaJunk(item) {
+  const text = normalizeAgendaItem(item);
+  if (text.length < 3) {
+    return true;
+  }
+  return AGENDA_JUNK_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// Filter raw agenda items to substantive tracks/topics: drop website nav/CTA
+// junk and items that merely repeat the card's date/location/name, then cap at 5.
+function cleanAgenda(rawAgenda, { date, location, name }) {
+  const items = cleanTextArray(rawAgenda);
+  if (!items.length) {
+    return [];
+  }
+  const dupes = new Set(
+    [date, location, name]
+      .filter((value) => value && value !== "TBD")
+      .map(normalizeAgendaItem)
+      .filter(Boolean),
+  );
+  const result = [];
+  for (const item of items) {
+    if (isAgendaJunk(item)) {
       continue;
     }
-    const hit = sponsors.find((sponsor) => {
-      const hay = normalizeCompany(sponsor);
-      return hay && (hay === needle || hay.includes(needle) || needle.includes(hay));
-    });
-    if (hit) {
-      matched.push(competitor);
+    if (dupes.has(normalizeAgendaItem(item))) {
+      continue;
+    }
+    result.push(item);
+    if (result.length >= 5) {
+      break;
     }
   }
-
-  return Array.from(new Set(matched));
+  return result;
 }
 
 function normalizeCompany(value) {
