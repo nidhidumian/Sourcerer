@@ -125,26 +125,29 @@ function App() {
                 {analysis.cached ? "CACHED ANALYSIS" : "ANALYSIS READY"}
               </p>
               <h2>{profile.companyName || analysis.domain}</h2>
-              <p>{profile.oneLiner}</p>
-              <dl>
-                <div>
-                  <dt>FIT SCORE</dt>
-                  <dd>{profile.eventFitScore}/100</dd>
-                </div>
-                <div>
-                  <dt>INDUSTRY</dt>
-                  <dd>{profile.industry}</dd>
-                </div>
-                <div>
-                  <dt>ICP</dt>
-                  <dd>{formatList(profile.icp)}</dd>
-                </div>
-                <div>
-                  <dt>VERTICALS</dt>
-                  <dd>{formatList(profile.verticals)}</dd>
-                </div>
-              </dl>
-              <p>{profile.scoreRationale}</p>
+              <p className="analysis-oneliner">{profile.oneLiner}</p>
+
+              <div className="analysis-section">
+                <p className="analysis-eyebrow">ICP</p>
+                <p className="analysis-value">{formatList(profile.icp)}</p>
+              </div>
+
+              <div className="analysis-section">
+                <p className="analysis-eyebrow">INDUSTRY</p>
+                <p className="analysis-value">{profile.industry}</p>
+              </div>
+
+              <div className="analysis-section">
+                <p className="analysis-eyebrow">VERTICALS</p>
+                <p className="analysis-value">{formatList(profile.verticals)}</p>
+              </div>
+
+              <div className="analysis-section">
+                <p className="analysis-eyebrow">FOR {analysis.geography}</p>
+                <p className="analysis-value">{profile.scoreRationale}</p>
+              </div>
+
+              <hr className="analysis-rule" />
             </div>
           ) : null}
         </section>
