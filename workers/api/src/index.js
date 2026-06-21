@@ -183,10 +183,14 @@ app.get("/api/events", async (c) => {
     );
   }
 
+  const maxQueries = Math.min(
+    toPositiveInteger(c.env.EXA_EVENTS_MAX_QUERIES, DEFAULT_EXA_EVENTS_MAX_QUERIES),
+    budget.remaining,
+  );
   const queries = buildEventQueries(
     parseJson(search.queries_json, []),
     search.geography,
-    toPositiveInteger(c.env.EXA_EVENTS_MAX_QUERIES, DEFAULT_EXA_EVENTS_MAX_QUERIES),
+    maxQueries,
   );
 
   if (queries.length === 0) {
@@ -217,13 +221,17 @@ app.get("/api/events", async (c) => {
     )
     .run();
 
-  await recordAnalytics(c.env.DB, "events_exa_call", {
-    domain: search.domain,
-    geography: search.geography,
-    searchId: search.id,
-    queryCount: queries.length,
-    eventCount: events.length,
-  });
+  await Promise.all(
+    queries.map(() =>
+      recordAnalytics(c.env.DB, "events_exa_call", {
+        domain: search.domain,
+        geography: search.geography,
+        searchId: search.id,
+        queryCount: queries.length,
+        eventCount: events.length,
+      }),
+    ),
+  );
 
   return c.json({
     searchId: search.id,
@@ -233,7 +241,7 @@ app.get("/api/events", async (c) => {
     events,
     budget: {
       monthlyLimit: budget.limit,
-      callsRemainingAfterThis: Math.max(0, budget.remaining - 1),
+      callsRemainingAfterThis: Math.max(0, budget.remaining - queries.length),
     },
   });
 });
@@ -384,7 +392,7 @@ function buildEventQueries(queries, geography, maxQueries) {
     if (!base) {
       continue;
     }
-    const query = new RegExp(escapeRegExp(geography), "i").test(base)
+    const query = new RegExp(`\\b${escapeRegExp(geography)}\\b`, "i").test(base)
       ? base
       : `${base} ${geography}`;
     const key = query.toLowerCase();
