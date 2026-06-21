@@ -15,7 +15,7 @@ const DEFAULT_EXA_EVENTS_MAX_QUERIES = 4;
 const DEFAULT_EXA_RESULTS_PER_QUERY = 5;
 const DEFAULT_EXA_MAX_EVENTS = 12;
 const DEFAULT_EVENTS_LOOKAHEAD_MONTHS = 12;
-const DEFAULT_EVENTS_CACHE_VERSION = "2";
+const DEFAULT_EVENTS_CACHE_VERSION = "3";
 
 // Canonical country -> known aliases (all lower case). Used for the strict
 // geography gate. Kept intentionally small; unknown geographies fall back to a
@@ -65,7 +65,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Dec 2-6, 2024",
     priorYearLocation: "Las Vegas, United States",
-    tags: ["cloud", "infrastructure", "devops", "developer", "security", "data", "saas", "ai"],
+    tags: ["cloud", "infrastructure", "devops", "developer"],
   },
   {
     name: "Google Cloud Next",
@@ -74,7 +74,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Apr 9-11, 2024",
     priorYearLocation: "Las Vegas, United States",
-    tags: ["cloud", "developer", "data", "ai", "infrastructure"],
+    tags: ["cloud", "infrastructure", "developer"],
   },
   {
     name: "Microsoft Ignite",
@@ -83,7 +83,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Nov 19-22, 2024",
     priorYearLocation: "Chicago, United States",
-    tags: ["cloud", "security", "developer", "it", "infrastructure", "ai"],
+    tags: ["cloud", "infrastructure", "developer"],
   },
   {
     name: "Dreamforce",
@@ -92,7 +92,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Sep 17-19, 2024",
     priorYearLocation: "San Francisco, United States",
-    tags: ["saas", "sales", "crm", "marketing", "b2b"],
+    tags: ["crm", "sales"],
   },
   {
     name: "SaaStr Annual",
@@ -101,7 +101,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Sep 10-12, 2024",
     priorYearLocation: "San Mateo, United States",
-    tags: ["saas", "sales", "b2b", "marketing", "startup"],
+    tags: ["saas"],
   },
   {
     name: "Money20/20 USA",
@@ -110,7 +110,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Oct 27-30, 2024",
     priorYearLocation: "Las Vegas, United States",
-    tags: ["fintech", "payments", "finance", "banking", "b2b"],
+    tags: ["fintech", "payments"],
   },
   {
     name: "HIMSS Global Health Conference",
@@ -119,7 +119,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Mar 11-15, 2024",
     priorYearLocation: "Orlando, United States",
-    tags: ["healthcare", "health", "medtech", "biotech", "life sciences"],
+    tags: ["healthcare", "medtech"],
   },
   {
     name: "RSA Conference",
@@ -128,7 +128,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "May 6-9, 2024",
     priorYearLocation: "San Francisco, United States",
-    tags: ["security", "cybersecurity", "infosec", "it"],
+    tags: ["cybersecurity", "security", "infosec"],
   },
   {
     name: "Legalweek",
@@ -137,7 +137,7 @@ const FLAGSHIP_EVENTS = [
     country: "United States",
     priorYearDate: "Jan 28-31, 2025",
     priorYearLocation: "New York, United States",
-    tags: ["legal", "legaltech", "law", "compliance"],
+    tags: ["legal", "legaltech"],
   },
   {
     name: "Web Summit",
@@ -146,7 +146,7 @@ const FLAGSHIP_EVENTS = [
     country: "Portugal",
     priorYearDate: "Nov 11-14, 2024",
     priorYearLocation: "Lisbon, Portugal",
-    tags: ["tech", "startup", "saas", "b2b", "marketing"],
+    tags: ["tech", "startup"],
   },
   {
     name: "Collision",
@@ -155,7 +155,7 @@ const FLAGSHIP_EVENTS = [
     country: "Canada",
     priorYearDate: "Jun 17-20, 2024",
     priorYearLocation: "Toronto, Canada",
-    tags: ["tech", "startup", "saas", "b2b"],
+    tags: ["tech", "startup"],
   },
   {
     name: "London Tech Week",
@@ -164,7 +164,7 @@ const FLAGSHIP_EVENTS = [
     country: "United Kingdom",
     priorYearDate: "Jun 10-14, 2024",
     priorYearLocation: "London, United Kingdom",
-    tags: ["tech", "startup", "saas", "b2b", "ai"],
+    tags: ["tech", "startup"],
   },
 ];
 
@@ -851,21 +851,19 @@ function curateEvents(rawEvents, { geography, profile, lookaheadMonths, maxEvent
 }
 
 function curatedFlagships(profile, geography) {
-  const terms = buildRelevanceTerms(profile);
+  // Match flagships against the company's OWN category (industry/product), NOT the
+  // customer verticals/ICP it sells into — otherwise a dev-security company whose
+  // verticals list "Fintech"/"Healthcare" would wrongly anchor Money20/20 & HIMSS.
+  const focusTerms = buildFlagshipTerms(profile);
   const recommendedText = toStringArray(profile.recommendedEventTypes)
     .join(" ")
     .toLowerCase();
-  // Word-level matching avoids short-tag substring false positives
-  // (e.g. "digital" contains "it", "chain" contains "ai").
-  const recommendedWords = new Set(recommendedText.split(/[^a-z0-9]+/).filter(Boolean));
 
   return FLAGSHIP_EVENTS.filter((flagship) => {
     if (canonicalCountry(flagship.country) !== canonicalCountry(geography)) {
       return false;
     }
-    const tagHit = flagship.tags.some(
-      (tag) => recommendedWords.has(tag) || terms.includes(tag),
-    );
+    const tagHit = flagship.tags.some((tag) => focusTerms.has(tag));
     const nameHit = recommendedText.includes(flagship.name.toLowerCase());
     return tagHit || nameHit;
   }).map((flagship) => ({
@@ -946,6 +944,23 @@ function buildRelevanceTerms(profile) {
   }
 
   return Array.from(terms);
+}
+
+// Words describing the company's OWN category (not the customers it sells to).
+// Used to gate flagship anchors so they stay on-domain.
+function buildFlagshipTerms(profile) {
+  const words = new Set();
+  for (const source of [profile.industry, profile.productCategory]) {
+    if (typeof source !== "string") {
+      continue;
+    }
+    for (const token of source.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (token.length >= 3 && !RELEVANCE_STOPWORDS.has(token)) {
+        words.add(token);
+      }
+    }
+  }
+  return words;
 }
 
 function eventMatchesRelevance(event, terms) {
