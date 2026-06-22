@@ -1962,15 +1962,27 @@ function normalizeDateRange(value) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Cross-month range: "October 30 - November 2, 2026"
+  // Two-sided range, month first: "October 30 - November 2, 2026",
+  // "June 30, 2026 - July 2, 2026", "December 30, 2026 - January 2, 2027".
+  // The first year is optional; the trailing year is authoritative. Collapses
+  // to the same-month form when both ends share a month and year, and keeps
+  // both years for cross-year ranges.
   let m = t.match(
-    /([A-Za-z.]+)\s+(\d{1,2})\s*-\s*([A-Za-z.]+)\s+(\d{1,2}),?\s*(\d{4})/,
+    /([A-Za-z.]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?\s*-\s*([A-Za-z.]+)\s+(\d{1,2}),?\s*(\d{4})/,
   );
   if (m) {
     const m1 = monthIndex(m[1]);
-    const m2 = monthIndex(m[3]);
+    const m2 = monthIndex(m[4]);
     if (m1 !== null && m2 !== null) {
-      return `${MONTH_NAMES[m1]} ${Number(m[2])} - ${MONTH_NAMES[m2]} ${Number(m[4])}, ${m[5]}`;
+      const y1 = m[3] || m[6];
+      const y2 = m[6];
+      if (m1 === m2 && y1 === y2) {
+        return `${MONTH_NAMES[m1]} ${Number(m[2])}-${Number(m[5])}, ${y2}`;
+      }
+      if (y1 !== y2) {
+        return `${MONTH_NAMES[m1]} ${Number(m[2])}, ${y1} - ${MONTH_NAMES[m2]} ${Number(m[5])}, ${y2}`;
+      }
+      return `${MONTH_NAMES[m1]} ${Number(m[2])} - ${MONTH_NAMES[m2]} ${Number(m[5])}, ${y2}`;
     }
   }
 
@@ -2016,13 +2028,17 @@ function normalizeDateRange(value) {
     const a = isos[0];
     const mi = Number(a[2]) - 1;
     if (mi >= 0 && mi < 12) {
-      if (isos.length >= 2 && isos[1][2] === a[2]) {
-        return `${MONTH_NAMES[mi]} ${Number(a[3])}-${Number(isos[1][3])}, ${a[1]}`;
-      }
       if (isos.length >= 2) {
-        const mi2 = Number(isos[1][2]) - 1;
+        const b = isos[1];
+        const mi2 = Number(b[2]) - 1;
         if (mi2 >= 0 && mi2 < 12) {
-          return `${MONTH_NAMES[mi]} ${Number(a[3])} - ${MONTH_NAMES[mi2]} ${Number(isos[1][3])}, ${a[1]}`;
+          if (a[1] === b[1] && mi === mi2) {
+            return `${MONTH_NAMES[mi]} ${Number(a[3])}-${Number(b[3])}, ${a[1]}`;
+          }
+          if (a[1] === b[1]) {
+            return `${MONTH_NAMES[mi]} ${Number(a[3])} - ${MONTH_NAMES[mi2]} ${Number(b[3])}, ${a[1]}`;
+          }
+          return `${MONTH_NAMES[mi]} ${Number(a[3])}, ${a[1]} - ${MONTH_NAMES[mi2]} ${Number(b[3])}, ${b[1]}`;
         }
       }
       return `${MONTH_NAMES[mi]} ${Number(a[3])}, ${a[1]}`;
@@ -2096,8 +2112,7 @@ const DESCRIPTION_PLACEHOLDER_PATTERNS = [
   /sentence describing/i,
   /one or two sentences?/i,
   /one line summary/i,
-  /value prop(osition)?/i,
-  /why (this|the) (company|submitter|attendee)/i,
+  /^(write|generate|provide) (a|the|one)\b/i,
   /\bplaceholder\b/i,
   /\blorem ipsum\b/i,
   /^describe\b/i,
