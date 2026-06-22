@@ -7,6 +7,7 @@ const CACHE_TTL_HOURS = 24;
 const DEFAULT_ANALYZE_MONTHLY_LIMIT = 300;
 const DEFAULT_MAX_OUTPUT_TOKENS = 900;
 const DEFAULT_RESEARCH_MAX_OUTPUT_TOKENS = 1600;
+const DEFAULT_WHY_MAX_OUTPUT_TOKENS = 1200;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
@@ -33,7 +34,7 @@ const DEFAULT_EXA_EVENTS_MAX_QUERIES = 10;
 const DEFAULT_EXA_RESULTS_PER_QUERY = 5;
 const DEFAULT_EXA_MAX_EVENTS = 12;
 const DEFAULT_EVENTS_LOOKAHEAD_MONTHS = 12;
-const DEFAULT_EVENTS_CACHE_VERSION = "5";
+const DEFAULT_EVENTS_CACHE_VERSION = "6";
 
 // Known predatory / spam conference aggregators to drop from results. Operators
 // can extend this at runtime via the EVENTS_SPAM_DOMAINS env var.
@@ -610,7 +611,7 @@ app.get("/api/events", async (c) => {
     );
   }
 
-  const events = curateEvents(rawEvents, {
+  const curated = curateEvents(rawEvents, {
     geography: search.geography,
     profile,
     lookaheadMonths: toPositiveInteger(
@@ -620,6 +621,15 @@ app.get("/api/events", async (c) => {
     maxEvents: toPositiveInteger(c.env.EXA_MAX_EVENTS, DEFAULT_EXA_MAX_EVENTS),
     spamHosts: parseSpamHosts(c.env.EVENTS_SPAM_DOMAINS),
   });
+
+  // Generate the company-specific "why attend/sponsor" line per card (one
+  // batched OpenAI call) and strip internal fields before caching/returning.
+  const events = await attachEventWhys(
+    c.env,
+    curated,
+    profile,
+    search.geography,
+  );
 
   await c.env.DB.prepare(
     `INSERT INTO events_cache (id, search_id, domain, geography, events_json)
@@ -1025,7 +1035,8 @@ async function requestExaSearch(apiKey, query, numResults) {
               eventName: { type: "string", description: "The event name" },
               description: {
                 type: "string",
-                description: "One concise sentence describing the event",
+                description:
+                  "Factual one-line summary of what the event covers, drawn only from the page content; leave empty if not stated",
               },
               organizer: { type: "string", description: "Organizing company or body" },
               city: { type: "string", description: "Host city" },
@@ -1069,7 +1080,7 @@ async function requestExaSearch(apiKey, query, numResults) {
                 type: "array",
                 items: { type: "string" },
                 description:
-                  "Sponsor or exhibitor company names from the most recent edition, if listed anywhere on the page (sponsors/exhibitors/partners sections)",
+                  "Company names of sponsors, exhibitors, or partners from the most recent edition — gather them from any sponsors/exhibitors/partners section, sponsor logo grids, or 'sponsored by'/'in partnership with' text anywhere on the page. Return real company names only (no generic tier labels like 'Gold Sponsor').",
               },
               sponsorshipEmail: {
                 type: "string",
@@ -1121,7 +1132,7 @@ function toRawEvent(result) {
   return {
     name,
     organizer: cleanText(summary?.organizer),
-    description: cleanText(summary?.description),
+    description: sanitizeDescription(summary?.description),
     city: cleanText(summary?.city),
     country: cleanText(summary?.country),
     startDate: cleanText(summary?.startDate),
@@ -1282,13 +1293,14 @@ function finalizeCard(event) {
         }
       : null;
 
-  const date = tbd ? "TBD" : event.dateText || formatEventDate(event._startDate);
+  const date = tbd ? "TBD" : formatDisplayDate(event.dateText, event._startDate);
   const location = flagship ? "TBD" : locationKnown || "TBD";
 
   return {
     name: event.name,
     organizer: event.organizer || null,
-    description: event.description || null,
+    description: null,
+    why: null,
     date,
     location,
     tbd,
@@ -1298,7 +1310,175 @@ function finalizeCard(event) {
     lastYearSponsors: event._lastYearSponsors || [],
     sponsorshipEmail: event.sponsorshipEmail || null,
     url: event.url,
+    _scrapedDescription: sanitizeDescription(event.description),
   };
+}
+
+// Attach a company-specific "why attend/sponsor" line to every card. One batched
+// OpenAI call generates all whys; if it fails (or no key/cards) we fall back to a
+// deterministic themes-based why. Never renders schema/prompt placeholders, never
+// echoes a raw event recap. Strips internal `_scrapedDescription` before return.
+async function attachEventWhys(env, cards, profile, geography) {
+  if (!Array.isArray(cards) || cards.length === 0) {
+    return [];
+  }
+
+  let generated = [];
+  if (env.OPENAI_API_KEY) {
+    try {
+      generated = await requestEventWhys(env, { profile, geography, cards });
+      await recordAnalytics(env.DB, "events_why_openai_call", {
+        geography,
+        eventCount: cards.length,
+      }).catch(() => {});
+    } catch (error) {
+      console.error("Event WHY generation failed:", error?.message || error);
+      generated = [];
+    }
+  }
+
+  return cards.map((card, index) => {
+    const candidate = sanitizeWhy(generated[index]);
+    const why = candidate || genericWhy(card, profile);
+    const { _scrapedDescription, ...rest } = card;
+    return { ...rest, description: null, why: why || null };
+  });
+}
+
+function sanitizeWhy(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || isPlaceholderText(text)) {
+    return "";
+  }
+  return text;
+}
+
+// Deterministic fallback "why" from grounded card themes + the company profile.
+// Concrete and marketing-useful; never repeats the event name, organizer, date,
+// or location, and never emits placeholder text.
+function genericWhy(card, profile) {
+  const themes = (card.agenda || [])
+    .filter((item) => item && item !== "TBA")
+    .slice(0, 2);
+  const focus =
+    cleanText(profile.productCategory) ||
+    cleanText(profile.industry) ||
+    cleanText(profile.oneLiner) ||
+    "your solution";
+  const audience =
+    toStringArray(profile.icp).concat(toStringArray(profile.coreICP))[0] ||
+    "target buyers";
+
+  if (themes.length) {
+    return `A strong fit to build brand awareness, meet ${audience}, and position ${focus} around ${themes.join(" and ")}.`;
+  }
+  return `A strong fit to build brand awareness, meet ${audience}, and showcase ${focus} to decision-makers.`;
+}
+
+// One batched OpenAI call: returns an array of whys aligned by index to `cards`.
+async function requestEventWhys(env, { profile, geography, cards }) {
+  const model = env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+  const maxOutputTokens = toPositiveInteger(
+    env.OPENAI_WHY_MAX_OUTPUT_TOKENS,
+    DEFAULT_WHY_MAX_OUTPUT_TOKENS,
+  );
+
+  const profileContext = [
+    profile.companyName ? `Company: ${profile.companyName}` : "",
+    profile.oneLiner ? `What they sell: ${profile.oneLiner}` : "",
+    profile.industry ? `Industry: ${profile.industry}` : "",
+    profile.productCategory ? `Product category: ${profile.productCategory}` : "",
+    toStringArray(profile.icp).length
+      ? `ICP: ${toStringArray(profile.icp).join(", ")}`
+      : "",
+    toStringArray(profile.verticals).length
+      ? `Verticals: ${toStringArray(profile.verticals).join(", ")}`
+      : "",
+    toStringArray(profile.competitors).length
+      ? `Competitors: ${toStringArray(profile.competitors).join(", ")}`
+      : "",
+    `Target geography: ${geography}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const eventLines = cards
+    .map((card, index) => {
+      const themes = (card.agenda || [])
+        .filter((item) => item && item !== "TBA")
+        .join(", ");
+      const parts = [
+        `${index + 1}. ${card.name}`,
+        card._scrapedDescription ? `summary: ${card._scrapedDescription}` : "",
+        themes ? `themes: ${themes}` : "",
+      ].filter(Boolean);
+      return parts.join(" | ");
+    })
+    .join("\n");
+
+  const response = await fetch(OPENAI_RESPONSES_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "You write the 'why' line for B2B event cards. For each event, write ONE or TWO concrete sentences explaining why THIS company (per the profile) should attend or sponsor it — the value prop: audience to reach, pipeline/brand opportunity, where to showcase product. Be specific and marketing-useful. Do NOT mention the event name, organizer, dates, city, or country (those are shown elsewhere). Never output schema text, prompts, or placeholders. Return a 'whys' array in the SAME ORDER as the events, exactly one entry per event.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `COMPANY PROFILE\n${profileContext}\n\nEVENTS (write one why per event, in order)\n${eventLines}`,
+            },
+          ],
+        },
+      ],
+      max_output_tokens: maxOutputTokens,
+      reasoning: { effort: "low" },
+      store: false,
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: "event_whys",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              whys: {
+                type: "array",
+                minItems: cards.length,
+                maxItems: cards.length,
+                items: { type: "string" },
+              },
+            },
+            required: ["whys"],
+          },
+        },
+      },
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return raiseOpenAiError(response.status, data);
+  }
+
+  const parsed = parseJson(extractOutputText(data), null);
+  return parsed && Array.isArray(parsed.whys) ? parsed.whys : [];
 }
 
 function buildRelevanceTerms(profile) {
@@ -1370,7 +1550,9 @@ function eventMatchesRelevance(event, terms) {
 // analyze profile) are surfaced first; remaining grounded sponsor names follow.
 // Capped at 5. Never invents names — returns [] when no grounded data exists.
 function buildLastYearSponsors(sponsors, competitors) {
-  const grounded = cleanTextArray(sponsors);
+  const grounded = cleanTextArray(sponsors).filter(
+    (name) => !isSponsorTierLabel(name),
+  );
   if (!grounded.length) {
     return [];
   }
@@ -1389,6 +1571,21 @@ function buildLastYearSponsors(sponsors, competitors) {
   const matched = grounded.filter(isCompetitor);
   const rest = grounded.filter((name) => !isCompetitor(name));
   return [...matched, ...rest].slice(0, 5);
+}
+
+// Generic sponsor tier labels / section headers that are not real company names.
+function isSponsorTierLabel(name) {
+  const text = String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) {
+    return true;
+  }
+  return /^(platinum|gold|silver|bronze|diamond|title|presenting|lead|founding|premier|strategic|official|media|community|headline)?\s*(sponsors?|partners?|exhibitors?|supporters?|sponsorship|partnership)$/.test(
+    text,
+  );
 }
 
 // Website nav / CTA / section labels that masquerade as agenda topics.
@@ -1443,7 +1640,43 @@ const AGENDA_JUNK_PATTERNS = [
   /^see all$/,
   /^more info(rmation)?$/,
   /^day \d+$/,
+  // Generic filler that says nothing about the event's actual content.
+  /^panels?$/,
+  /^panel (sessions?|discussions?)$/,
+  /^keynotes?$/,
+  /^keynote (sessions?|speakers?)$/,
+  /^(interactive )?workshops?$/,
+  /^masterclass(es)?$/,
+  /^networking( events?| sessions?| reception| lunch| breaks?| drinks)?$/,
+  /^breakout sessions?$/,
+  /^fireside chats?$/,
+  /^round ?tables?$/,
+  /^exhibitions?$/,
+  /^expo( hall| floor)?$/,
+  /^(product )?demos?$/,
+  /^sessions?$/,
+  /^presentations?$/,
+  /^discussions?$/,
+  /^awards?$/,
+  /^after ?party$/,
+  /^receptions?$/,
+  /^lunch(es)?$/,
+  /^coffee breaks?$/,
+  /^q ?and ?a$/,
 ];
+
+// Stats / vanity metrics masquerading as agenda topics ("10,000+ Attendees",
+// "400+ Speakers", "51 Countries", "64% Loyalists"). Tested on the raw item so
+// digit grouping (commas, +, %) survives.
+function isAgendaStat(raw) {
+  const s = String(raw || "").toLowerCase();
+  if (/\b\d+(\.\d+)?\s*%/.test(s)) {
+    return true;
+  }
+  return /\b\d[\d,]*\s*\+?\s*(attendees|speakers|exhibitors|countries|sessions|sponsors|partners|delegates|visitors|companies|brands|tracks|stages|booths|startups|investors|nations|participants|hours|loyalists)\b/.test(
+    s,
+  );
+}
 
 function normalizeAgendaItem(value) {
   return String(value || "")
@@ -1454,6 +1687,9 @@ function normalizeAgendaItem(value) {
 }
 
 function isAgendaJunk(item) {
+  if (isAgendaStat(item)) {
+    return true;
+  }
   const text = normalizeAgendaItem(item);
   if (text.length < 3) {
     return true;
@@ -1462,12 +1698,11 @@ function isAgendaJunk(item) {
 }
 
 // Filter raw agenda items to substantive tracks/topics: drop website nav/CTA
-// junk and items that merely repeat the card's date/location/name, then cap at 5.
+// junk, generic filler, vanity stats, and items that merely repeat the card's
+// date/location/name, then cap at 5. When nothing real survives, show a clear
+// "TBA" placeholder rather than omitting the section.
 function cleanAgenda(rawAgenda, { date, location, name }) {
   const items = cleanTextArray(rawAgenda);
-  if (!items.length) {
-    return [];
-  }
   const dupes = new Set(
     [date, location, name]
       .filter((value) => value && value !== "TBD")
@@ -1487,7 +1722,7 @@ function cleanAgenda(rawAgenda, { date, location, name }) {
       break;
     }
   }
-  return result;
+  return result.length ? result : ["TBA"];
 }
 
 function normalizeCompany(value) {
@@ -1636,16 +1871,165 @@ function parseEventDate(value) {
   return null;
 }
 
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const MONTH_INDEX = {
+  jan: 0,
+  january: 0,
+  feb: 1,
+  february: 1,
+  mar: 2,
+  march: 2,
+  apr: 3,
+  april: 3,
+  may: 4,
+  jun: 5,
+  june: 5,
+  jul: 6,
+  july: 6,
+  aug: 7,
+  august: 7,
+  sep: 8,
+  sept: 8,
+  september: 8,
+  oct: 9,
+  october: 9,
+  nov: 10,
+  november: 10,
+  dec: 11,
+  december: 11,
+};
+
+function monthIndex(token) {
+  const key = String(token || "")
+    .toLowerCase()
+    .replace(/\./g, "");
+  return Object.prototype.hasOwnProperty.call(MONTH_INDEX, key)
+    ? MONTH_INDEX[key]
+    : null;
+}
+
 function formatEventDate(date) {
   if (!date) {
     return "TBD";
   }
   return date.toLocaleDateString("en-US", {
     year: "numeric",
-    month: "short",
+    month: "long",
     day: "numeric",
     timeZone: "UTC",
   });
+}
+
+// Display date for a card, normalized to "FullMonth D-D, YYYY" (single day:
+// "FullMonth D, YYYY"). Falls back to the parsed start date, then the raw text.
+function formatDisplayDate(dateText, startDate) {
+  const normalized = normalizeDateRange(dateText);
+  if (normalized) {
+    return normalized;
+  }
+  if (startDate) {
+    return formatEventDate(startDate);
+  }
+  return cleanText(dateText) || "TBD";
+}
+
+// Normalize a human-readable date/range into "FullMonth D-D, YYYY". Handles
+// month-first and day-first orders, single days, same-month and cross-month
+// ranges, and assorted dash/"to" separators. Returns null when unparseable.
+function normalizeDateRange(value) {
+  const text = cleanText(value);
+  if (!text) {
+    return null;
+  }
+  const t = text
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/\s+to\s+/gi, "-")
+    .replace(/(\d)(st|nd|rd|th)\b/gi, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Cross-month range: "October 30 - November 2, 2026"
+  let m = t.match(
+    /([A-Za-z.]+)\s+(\d{1,2})\s*-\s*([A-Za-z.]+)\s+(\d{1,2}),?\s*(\d{4})/,
+  );
+  if (m) {
+    const m1 = monthIndex(m[1]);
+    const m2 = monthIndex(m[3]);
+    if (m1 !== null && m2 !== null) {
+      return `${MONTH_NAMES[m1]} ${Number(m[2])} - ${MONTH_NAMES[m2]} ${Number(m[4])}, ${m[5]}`;
+    }
+  }
+
+  // Same-month range, month first: "October 19-21, 2026"
+  m = t.match(/([A-Za-z.]+)\s+(\d{1,2})\s*-\s*(\d{1,2}),?\s*(\d{4})/);
+  if (m) {
+    const mi = monthIndex(m[1]);
+    if (mi !== null) {
+      return `${MONTH_NAMES[mi]} ${Number(m[2])}-${Number(m[3])}, ${m[4]}`;
+    }
+  }
+
+  // Single day, month first: "October 19, 2026"
+  m = t.match(/([A-Za-z.]+)\s+(\d{1,2}),?\s*(\d{4})/);
+  if (m) {
+    const mi = monthIndex(m[1]);
+    if (mi !== null) {
+      return `${MONTH_NAMES[mi]} ${Number(m[2])}, ${m[3]}`;
+    }
+  }
+
+  // Same-month range, day first: "19-21 October 2026"
+  m = t.match(/(\d{1,2})\s*-\s*(\d{1,2})\s+([A-Za-z.]+),?\s*(\d{4})/);
+  if (m) {
+    const mi = monthIndex(m[3]);
+    if (mi !== null) {
+      return `${MONTH_NAMES[mi]} ${Number(m[1])}-${Number(m[2])}, ${m[4]}`;
+    }
+  }
+
+  // Single day, day first: "19 October 2026"
+  m = t.match(/(\d{1,2})\s+([A-Za-z.]+),?\s*(\d{4})/);
+  if (m) {
+    const mi = monthIndex(m[2]);
+    if (mi !== null) {
+      return `${MONTH_NAMES[mi]} ${Number(m[1])}, ${m[3]}`;
+    }
+  }
+
+  // ISO range/single: "2026-10-19" or "2026-10-19/2026-10-21"
+  const isos = [...t.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)];
+  if (isos.length >= 1) {
+    const a = isos[0];
+    const mi = Number(a[2]) - 1;
+    if (mi >= 0 && mi < 12) {
+      if (isos.length >= 2 && isos[1][2] === a[2]) {
+        return `${MONTH_NAMES[mi]} ${Number(a[3])}-${Number(isos[1][3])}, ${a[1]}`;
+      }
+      if (isos.length >= 2) {
+        const mi2 = Number(isos[1][2]) - 1;
+        if (mi2 >= 0 && mi2 < 12) {
+          return `${MONTH_NAMES[mi]} ${Number(a[3])} - ${MONTH_NAMES[mi2]} ${Number(isos[1][3])}, ${a[1]}`;
+        }
+      }
+      return `${MONTH_NAMES[mi]} ${Number(a[3])}, ${a[1]}`;
+    }
+  }
+
+  return null;
 }
 
 function packEvents(version, events) {
@@ -1701,6 +2085,40 @@ function cleanTextArray(value) {
 function cleanEmail(value) {
   const text = cleanText(value);
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) ? text : "";
+}
+
+// Schema/prompt text that sometimes leaks into a scraped description when the
+// model has nothing real to say (e.g. it echoes the field instruction). Never
+// show these on a card.
+const DESCRIPTION_PLACEHOLDER_PATTERNS = [
+  /concise sentence/i,
+  /describing the event/i,
+  /sentence describing/i,
+  /one or two sentences?/i,
+  /one line summary/i,
+  /value prop(osition)?/i,
+  /why (this|the) (company|submitter|attendee)/i,
+  /\bplaceholder\b/i,
+  /\blorem ipsum\b/i,
+  /^describe\b/i,
+  /leave empty if/i,
+];
+
+function isPlaceholderText(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return true;
+  }
+  return DESCRIPTION_PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// Cleaned scraped description with schema/prompt placeholders stripped.
+function sanitizeDescription(value) {
+  const text = cleanText(value);
+  if (!text || isPlaceholderText(text)) {
+    return "";
+  }
+  return text;
 }
 
 function escapeRegExp(value) {
