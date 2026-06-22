@@ -15,9 +15,9 @@ function App() {
   const [eventsError, setEventsError] = useState("");
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
   const [showWishlistNote, setShowWishlistNote] = useState(false);
+  const [showSponsorshipNote, setShowSponsorshipNote] = useState(false);
   const profile = analysis?.profile;
   const eventList = events?.events;
-  const companyName = profile?.companyName || analysis?.domain || "our team";
 
   useEffect(() => {
     const searchId = analysis?.searchId;
@@ -282,12 +282,7 @@ function App() {
                         <button
                           className="event-pill"
                           type="button"
-                          onClick={() => {
-                            window.location.href = sponsorshipMailto(
-                              item,
-                              companyName,
-                            );
-                          }}
+                          onClick={() => setShowSponsorshipNote(true)}
                         >
                           REQUEST SPONSORSHIP KIT
                         </button>
@@ -329,6 +324,33 @@ function App() {
           </div>
         </div>
       ) : null}
+
+      {showSponsorshipNote ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sponsorship-title"
+          onClick={() => setShowSponsorshipNote(false)}
+        >
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <p className="events-kicker" id="sponsorship-title">
+              REQUEST SPONSORSHIP KIT
+            </p>
+            <p className="modal-body">
+              Feature coming soon. We&apos;ll let you send events to request a
+              media kit.
+            </p>
+            <button
+              className="event-pill"
+              type="button"
+              onClick={() => setShowSponsorshipNote(false)}
+            >
+              GOT IT
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -339,13 +361,6 @@ function formatList(value) {
 
 function isTbd(value) {
   return !value || /^tbd$/i.test(String(value).trim());
-}
-
-function sponsorshipMailto(event, company) {
-  const to = event.sponsorshipEmail || "";
-  const subject = `Sponsorship kit request — ${event.name}`;
-  const body = `Hi, I'm from ${company}. I'd like to request a media kit/sponsorship brochure for ${event.name}. We're exploring sponsorship opportunities.`;
-  return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 export default App;
